@@ -1,0 +1,94 @@
+# === Build output ===
+[Bb]in/
+[Oo]bj/
+artifacts/
+publish/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb
+*.booproj
+*.svd
+
+# === Test results and coverage ===
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.xml
+coverage*.json
+
+# === IDE / tooling ===
+.vs/
+.vscode/
+.idea/
+_ReSharper*/
+*.DotSettings.user
+*.swp
+*.swo
+*~
+
+# === NuGet / packages ===
+*.nupkg
+*.snupkg
+packages/
+!packages/build/
+
+# === Logs / generated data / dumps ===
+*.log
+*.csv
+*.tmp
+*.bak
+*.orig
+*.rej
+runs/
+[Dd]ump*/
+
+# === Video files ===
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.webm
+*.m4v
+*.flv
+*.mpg
+*.mpeg
+*.3gp
+*.ts
+*.mts
+*.m2ts
+
+# === Photo files ===
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.tif
+*.tiff
+*.webp
+*.heic
+*.heif
+*.avif
+*.raw
+*.dng
+*.cr2
+*.nef
+*.arw
+
+# === OS files ===
+Thumbs.db
+ehthumbs.db
+.DS_Store
+desktop.ini
+$RECYCLE.BIN/
