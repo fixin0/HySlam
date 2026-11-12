@@ -51,11 +51,15 @@ namespace HySlam.Core.Slam
 
         public bool CreateNewKeyframe(Mat gray, Mat mask, CameraPose worldPose)
         {
-            using var descriptors = new Mat();
+            // The keyframe owns the descriptor matrix, so it must not be disposed here.
+            var descriptors = new Mat();
             orb.DetectAndCompute(gray, mask, out KeyPoint[] kps, descriptors);
 
             if (kps.Length < MinKeyframePoints)
+            {
+                descriptors.Dispose();
                 return false;
+            }
 
             var newKf = new Keyframe
             {

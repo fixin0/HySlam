@@ -77,6 +77,11 @@ namespace HySlam.Core.Rendering
             GL.Uniform1(GetUniformLocation(name), value);
         }
 
+        public void SetInt(string name, int value)
+        {
+            GL.Uniform1(GetUniformLocation(name), value);
+        }
+
         private static int CompileShader(ShaderType type, string source)
         {
             int shaderId = GL.CreateShader(type);

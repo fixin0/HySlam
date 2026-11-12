@@ -82,8 +82,23 @@ namespace HySlam
                 .WriteTo.Console(standardErrorFromLevel: LogEventLevel.Error)
                 .CreateLogger();
 
+            AppDomain.CurrentDomain.UnhandledException += (_, eventArgs) =>
+                Log.Fatal(eventArgs.ExceptionObject as Exception, "Unhandled exception in the application domain.");
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => Log.Information("Process exit requested.");
+            TaskScheduler.UnobservedTaskException += (_, eventArgs) =>
+                Log.Error(eventArgs.Exception, "Unobserved task exception.");
+
             try
             {
+                Log.Information(
+                    "Starting HySlam: {Arguments}",
+                    args.Length == 0 ? "(no arguments)" : string.Join(' ', args));
+                Log.Information(
+                    "Runtime {Framework} on {OS} ({Architecture}).",
+                    Environment.Version,
+                    Environment.OSVersion,
+                    System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture);
+
                 ParseResult result = ParseArguments(args, out RunOptions? options);
 
                 if (result == ParseResult.Help)
@@ -92,8 +107,11 @@ namespace HySlam
                 if (result == ParseResult.Error)
                     return 1;
 
+                Log.Information("Creating the game window.");
                 using var application = new WindowManager(options!);
+                Log.Information("Entering the main loop.");
                 application.Run();
+                Log.Information("Main loop finished normally.");
                 return 0;
             }
             catch (Exception exception)

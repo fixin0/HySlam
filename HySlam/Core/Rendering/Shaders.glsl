@@ -28,12 +28,15 @@ void main()
 #fragment
 #version 330 core
 in vec3 vertexColor;
+uniform int uRoundPoints;
 out vec4 FragColor;
 void main()
 {
-    vec2 coord = gl_PointCoord * 2.0 - 1.0;
-    if (dot(coord, coord) > 1.0) {
-        discard;
+    if (uRoundPoints == 1) {
+        vec2 coord = gl_PointCoord * 2.0 - 1.0;
+        if (dot(coord, coord) > 1.0) {
+            discard;
+        }
     }
     FragColor = vec4(vertexColor, 1.0);
 }

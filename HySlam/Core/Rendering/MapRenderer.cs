@@ -11,9 +11,8 @@ namespace HySlam.Core.Rendering
         private readonly Shader shader;
         private readonly int vao, vbo;
 
-        // Cached buffer upload: skip GL.BufferData when nothing changed since last frame.
-        private int lastPointCount;
-        private int lastTrajCount;
+        // Cached buffer upload: reallocate only when the total float count changes.
+        private int bufferFloats;
 
         // Free camera (orbit) variables
         private float freeCamYaw = 45f;
@@ -60,36 +59,22 @@ namespace HySlam.Core.Rendering
 
         public void Render(Vector2i size, MapData map, CameraPose pose)
         {
-            int w = size.X;
-            int h = size.Y;
-            int halfW = w / 2;
-
-            // 1. Top-Down (left side)
-            GL.Viewport(0, 0, halfW, h);
-            GL.Scissor(0, 0, halfW, h);
+            // Single full-window free-camera view.
+            GL.Viewport(0, 0, size.X, size.Y);
+            GL.Scissor(0, 0, size.X, size.Y);
             GL.ClearColor(0.0f, 0.0f, 0.0f, 1f); // Pure black background
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-            RenderScene(size, map, pose, topDown: true);
-
-            // 2. Free View (right side)
-            GL.Viewport(halfW, 0, halfW, h);
-            GL.Scissor(halfW, 0, halfW, h);
-            GL.ClearColor(0.0f, 0.0f, 0.0f, 1f);
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-            RenderScene(size, map, pose, topDown: false);
+            RenderScene(size, map, pose);
         }
 
-        private void RenderScene(Vector2i size, MapData map, CameraPose pose, bool topDown)
+        private void RenderScene(Vector2i size, MapData map, CameraPose pose)
         {
             var lines = new List<float>();
             var points = new List<float>();
 
-            // Draw the grid and frustum in both views
-            if (!topDown)
-            {
-                AddGroundGrid(lines); // Draw the grid only in the free view
-                AddHeightAxis(lines);
-            }
+            // Draw the ground grid, height axis and camera frustum.
+            AddGroundGrid(lines);
+            AddHeightAxis(lines);
             AddCameraFrustum(lines, pose);
 
             int lineStart = 0;
@@ -111,34 +96,35 @@ namespace HySlam.Core.Rendering
             }
             int trajCount = map.Trajectory.Count;
 
-            // Only re-upload the big point cloud when it actually changed. The line
-            // geometry (grid + frustum) is small and re-uploaded every frame.
-            bool pointsChanged = pointCount != lastPointCount || trajCount != lastTrajCount;
-            if (pointsChanged)
+            // The point cloud is the expensive part of the upload; geometry lines are
+            // small. Reallocate the buffer only when its total size changes, otherwise
+            // update just the line range.
+            int totalFloats = lines.Count + points.Count;
+            if (totalFloats > 0)
             {
                 GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-                GL.BufferData(BufferTarget.ArrayBuffer, (lines.Count + points.Count) * sizeof(float),
-                    CombineLists(lines, points), BufferUsageHint.DynamicDraw);
-                lastPointCount = pointCount;
-                lastTrajCount = trajCount;
+
+                if (totalFloats != bufferFloats)
+                {
+                    GL.BufferData(BufferTarget.ArrayBuffer, totalFloats * sizeof(float),
+                        CombineLists(lines, points), BufferUsageHint.DynamicDraw);
+                    bufferFloats = totalFloats;
+                }
+                else if (lines.Count > 0)
+                {
+                    float[] lineData = lines.ToArray();
+                    GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero,
+                        lineData.Length * sizeof(float), lineData);
+                }
             }
 
             GLVector3 eye, target, up;
             Matrix4 projection;
 
-            float aspect = (size.X / 2.0f) / size.Y;
+            float aspect = (float)size.X / size.Y;
 
-            if (topDown)
-            {
-                GetTopDownCamera(map, out eye, out target, out up);
-                float radius = (target - eye).Length;
-                projection = Matrix4.CreateOrthographicOffCenter(-radius * aspect, radius * aspect, -radius, radius, 0.1f, 5000f);
-            }
-            else
-            {
-                GetFreeCamera(map, out eye, out target, out up);
-                projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), aspect, 0.1f, 2000f);
-            }
+            GetFreeCamera(map, out eye, out target, out up);
+            projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), aspect, 0.1f, 2000f);
 
             Matrix4 view = Matrix4.LookAt(eye, target, up);
             Matrix4 mvp = view * projection;
@@ -146,9 +132,9 @@ namespace HySlam.Core.Rendering
             shader.Use();
             shader.SetMatrix4("uMVP", ref mvp);
 
-            // Disable distance fading in both views so the cloud stays bright when
-            // the free camera is zoomed out.
-            shader.SetVector3("uCameraPos", topDown ? GLVector3.Zero : eye);
+            // Distance fading stays disabled so the cloud remains bright when the free
+            // camera is zoomed out.
+            shader.SetVector3("uCameraPos", eye);
             shader.SetFloat("uNearFade", 0.0f);
             shader.SetFloat("uFarFade", 0.0f);
 
@@ -156,51 +142,28 @@ namespace HySlam.Core.Rendering
 
             if (lineCount > 0)
             {
-                GL.LineWidth(1.5f);
+                // A Core profile only guarantees a line width of 1.0; asking for more
+                // raises GL_INVALID_VALUE and can upset some drivers.
+                shader.SetInt("uRoundPoints", 0);
                 GL.DrawArrays(PrimitiveType.Lines, lineStart, lineCount);
             }
 
             if (pointCount > 0)
             {
-                shader.SetFloat("uPointSize", topDown ? 4.0f : 5.0f);
+                shader.SetInt("uRoundPoints", 1);
+                shader.SetFloat("uPointSize", 5.0f);
                 GL.DrawArrays(PrimitiveType.Points, pointStart, pointCount);
             }
 
             if (trajCount > 1)
             {
+                shader.SetInt("uRoundPoints", 1);
                 shader.SetFloat("uPointSize", 7.0f);
                 GL.DrawArrays(PrimitiveType.Points, trajStart, trajCount);
             }
 
             GL.BindVertexArray(0);
             GL.UseProgram(0);
-        }
-
-        private void GetTopDownCamera(MapData map, out GLVector3 eye, out GLVector3 target, out GLVector3 up)
-        {
-            if (map.Points.Count == 0)
-            {
-                eye = new GLVector3(0, 100, 0);
-                target = GLVector3.Zero;
-                up = -GLVector3.UnitZ;
-                return;
-            }
-
-            var min = map.Points[0].Position;
-            var max = map.Points[0].Position;
-            foreach (var p in map.Points)
-            {
-                min = GLVector3.ComponentMin(min, p.Position);
-                max = GLVector3.ComponentMax(max, p.Position);
-            }
-
-            var center = (min + max) * 0.5f;
-            float radius = (max - min).Length * 0.5f;
-            radius = Math.Clamp(radius, 10f, 500f);
-
-            eye = center + new GLVector3(0, radius * 2.0f, 0);
-            target = center;
-            up = -GLVector3.UnitZ;
         }
 
         private void GetFreeCamera(MapData map, out GLVector3 eye, out GLVector3 target, out GLVector3 up)

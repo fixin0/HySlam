@@ -3,6 +3,7 @@ using HySlam.Core.Diagnostics;
 using HySlam.Core.Rendering;
 using HySlam.Core.Slam;
 using HySlam.UI;
+using System.ComponentModel;
 using OpenCvSharp;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -28,7 +29,13 @@ namespace HySlam.Core
         private int frameIndex;
         private int framesRead;
         private int framesProcessed;
-        private bool videoEnded, highGuiClosed, recordingFinished;
+        private bool videoEnded, recordingFinished;
+
+        // Diagnostics: log every step of the first few frames so a native crash can
+        // be located from the last line that reached the log sink.
+        private const int TraceFrames = 3;
+        private int updateFrames;
+        private int renderFrames;
 
         // === Quality and Visualization Settings ===
         private const int FrameSkip = 3;
@@ -61,17 +68,34 @@ namespace HySlam.Core
 
         protected override void OnLoad()
         {
-            base.OnLoad();
+            try
+            {
+                Log.Information("OnLoad: begin.");
 
-            GL.Enable(EnableCap.DepthTest);
-            GL.Enable(EnableCap.ProgramPointSize);
-            GL.Enable(EnableCap.ScissorTest);
+                base.OnLoad();
+                Log.Information("OnLoad: base.OnLoad completed.");
 
-            InitializeRenderer();
-            InitializeSLAM();
+                GL.Enable(EnableCap.DepthTest);
+                GL.Enable(EnableCap.ProgramPointSize);
+                GL.Enable(EnableCap.ScissorTest);
 
-           
-            Log.Information("HySlam initialized -> {VideoPath}", options.VideoPath);
+                Log.Information(
+                    "OpenGL {Version} on {Renderer} ({Vendor}).",
+                    GL.GetString(StringName.Version) ?? "unknown",
+                    GL.GetString(StringName.Renderer) ?? "unknown",
+                    GL.GetString(StringName.Vendor) ?? "unknown");
+
+                InitializeRenderer();
+                InitializeSLAM();
+
+                Log.Information("HySlam initialized -> {VideoPath}", options.VideoPath);
+                Log.Information("OnLoad: end.");
+            }
+            catch (Exception ex)
+            {
+                Log.Fatal(ex, "HySlam failed to initialize.");
+                Close();
+            }
         }
 
         private void InitializeRenderer()
@@ -88,7 +112,14 @@ namespace HySlam.Core
 
         private void InitializeSLAM()
         {
+            Log.Information("InitializeSLAM: opening video capture.");
             capture = new CameraFeedWindow(options.VideoPath);
+
+            Log.Information(
+                "InitializeSLAM: video {Width}x{Height} @ {Fps:0.##} fps.",
+                capture.FrameWidth,
+                capture.FrameHeight,
+                capture.Fps);
 
             keyframes = new KeyframeManager();
             slam = new SlamEngine(map, keyframes);
@@ -96,6 +127,7 @@ namespace HySlam.Core
             double width = capture.FrameWidth;
             double height = capture.FrameHeight;
 
+            Log.Information("InitializeSLAM: configuring the SLAM engine.");
             slam.Initialize(
                 width,
                 height,
@@ -143,20 +175,29 @@ namespace HySlam.Core
 
         protected override void OnUpdateFrame(FrameEventArgs e)
         {
-            base.OnUpdateFrame(e);
-
-            if (KeyboardState.IsKeyDown(Keys.Escape))
+            try
             {
-                Close();
-                return;
-            }
+                base.OnUpdateFrame(e);
 
-            // --- FREE VIEW MOUSE CONTROL (Right Side of the Screen) ---
-            var mouse = MouseState;
-            bool inFreeView = mouse.X > Size.X / 2;
+                updateFrames++;
+                if (updateFrames <= TraceFrames || updateFrames % 120 == 0)
+                {
+                    Log.Information(
+                        "OnUpdateFrame #{UpdateFrame}: begin (read {FramesRead}, processed {FramesProcessed}).",
+                        updateFrames,
+                        framesRead,
+                        framesProcessed);
+                }
 
-            if (inFreeView)
-            {
+                if (KeyboardState.IsKeyDown(Keys.Escape))
+                {
+                    Close();
+                    return;
+                }
+
+                // --- FREE VIEW MOUSE CONTROL (whole window) ---
+                var mouse = MouseState;
+
                 if (mouse.IsButtonDown(MouseButton.Left))
                 {
                     renderer.Orbit(mouse.Delta.X, mouse.Delta.Y);
@@ -167,45 +208,48 @@ namespace HySlam.Core
                 {
                     renderer.Zoom(scroll);
                 }
-            }
 
-            if (!videoEnded)
-            {
-                if (options.Deterministic)
+                if (!videoEnded)
                 {
-                    // One source frame per update: no wall-clock pacing, so two runs
-                    // with the same input and options process the same frame sequence.
-                    ProcessVideoFrame();
-                }
-                else
-                {
-                    accumulatedTime += e.Time;
-                    const double maxAccum = 0.5;
-                    if (accumulatedTime > maxAccum) accumulatedTime = maxAccum;
-
-                    while (accumulatedTime >= frameInterval && !videoEnded)
+                    if (options.Deterministic)
                     {
+                        // One source frame per update: no wall-clock pacing, so two runs
+                        // with the same input and options process the same frame sequence.
                         ProcessVideoFrame();
-                        accumulatedTime -= frameInterval;
+                    }
+                    else
+                    {
+                        accumulatedTime += e.Time;
+                        const double maxAccum = 0.5;
+                        if (accumulatedTime > maxAccum) accumulatedTime = maxAccum;
+
+                        while (accumulatedTime >= frameInterval && !videoEnded)
+                        {
+                            ProcessVideoFrame();
+                            accumulatedTime -= frameInterval;
+                        }
                     }
                 }
-            }
 
-            if (!highGuiClosed)
+                Title = $"HySlam | Inliers: {slam.InlierCount} | +3D: {slam.TriangulatedCount} | Total: {map.Points.Count}";
+
+                if (updateFrames <= TraceFrames)
+                    Log.Information("OnUpdateFrame #{UpdateFrame}: end.", updateFrames);
+            }
+            catch (Exception ex)
             {
-                if (capture.PumpEvents())
-                {
-                    highGuiClosed = true;
-                    Close();
-                    return;
-                }
+                Log.Fatal(ex, "HySlam update failed.");
+                Close();
             }
-
-            Title = $"HySlam | Inliers: {slam.InlierCount} | +3D: {slam.TriangulatedCount} | Total: {map.Points.Count}";
         }
 
         private void ProcessVideoFrame()
         {
+            bool traceFrame = framesRead < TraceFrames * FrameSkip;
+
+            if (traceFrame)
+                Log.Information("ProcessVideoFrame: reading source frame #{FramesRead}.", framesRead + 1);
+
             if (!capture.ReadFrame())
             {
                 EndVideo("Video finished.");
@@ -221,16 +265,24 @@ namespace HySlam.Core
                 return;
             }
 
+            if (traceFrame)
+            {
+                Log.Information(
+                    "ProcessVideoFrame: decoded frame #{FramesRead} ({Width}x{Height}, {Channels} channels).",
+                    framesRead,
+                    capture.Frame.Width,
+                    capture.Frame.Height,
+                    capture.Frame.Channels());
+            }
+
             bool processed = slam.ProcessFrame(capture.Frame, out var kfFiltered, out var currFiltered);
             framesProcessed++;
 
+            if (traceFrame)
+                Log.Information("ProcessVideoFrame: SLAM processed={Processed}.", processed);
+
             if (recorder.Enabled)
                 recorder.Record(framesRead, slam, map, keyframes.CurrentId);
-
-            if (processed && !highGuiClosed)
-            {
-                capture.ShowFrame(kfFiltered, currFiltered, slam.UndistortedFrame);
-            }
 
             FinishIfFrameLimitReached();
         }
@@ -270,34 +322,73 @@ namespace HySlam.Core
 
         protected override void OnRenderFrame(FrameEventArgs e)
         {
-            base.OnRenderFrame(e);
+            try
+            {
+                base.OnRenderFrame(e);
 
-            renderer.Render(Size, map, slam.Pose);
+                renderFrames++;
+                if (renderFrames <= TraceFrames || renderFrames % 120 == 0)
+                {
+                    Log.Information(
+                        "OnRenderFrame #{RenderFrame}: begin (points {Points}, trajectory {Trajectory}).",
+                        renderFrames,
+                        map.Points.Count,
+                        map.Trajectory.Count);
+                }
 
-            SwapBuffers();
+                renderer.Render(Size, map, slam.Pose);
 
-            
+                if (renderFrames <= TraceFrames)
+                    Log.Information("OnRenderFrame #{RenderFrame}: scene drawn.", renderFrames);
+
+                SwapBuffers();
+
+                if (renderFrames <= TraceFrames)
+                    Log.Information("OnRenderFrame #{RenderFrame}: buffers swapped.", renderFrames);
+            }
+            catch (Exception ex)
+            {
+                Log.Fatal(ex, "HySlam render failed.");
+                Close();
+            }
         }
+
 
         protected override void OnResize(ResizeEventArgs e)
         {
+            Log.Information("OnResize: {Width}x{Height}.", e.Width, e.Height);
             base.OnResize(e);
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            Log.Information(
+                "OnClosing: videoEnded={VideoEnded}, frames read={FramesRead}, processed={FramesProcessed}.",
+                videoEnded,
+                framesRead,
+                framesProcessed);
+
+            base.OnClosing(e);
         }
 
         protected override void OnUnload()
         {
+            Log.Information("OnUnload: begin.");
             base.OnUnload();
 
             FinishRecording();
+            Log.Information("OnUnload: recording finished.");
 
             capture?.Dispose();
             keyframes?.Dispose();
             slam?.Dispose();
             recorder?.Dispose();
+            Log.Information("OnUnload: resources disposed.");
 
             try { Cv2.DestroyAllWindows(); } catch { }
 
             renderer?.Dispose();
+            Log.Information("OnUnload: end.");
         }
     }
 }

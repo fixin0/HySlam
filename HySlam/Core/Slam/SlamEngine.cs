@@ -1,5 +1,6 @@
 using HySlam.Core.Data;
 using OpenCvSharp;
+using Serilog;
 
 using GLVector3 = OpenTK.Mathematics.Vector3;
 
@@ -103,6 +104,11 @@ namespace HySlam.Core.Slam
         private List<Point2f> previousPoints = new();
         private bool hasPreviousFrame;
 
+        // Diagnostics: trace the first few calls in detail so a native crash inside
+        // OpenCV can be located from the last logged stage.
+        private const int TracedCalls = 4;
+        private int processCalls;
+
         // === Metric pose state ===
         // World frame: x right, y down, z forward, origin on the road below the
         // first camera position. The camera therefore sits at y = -CameraHeight.
@@ -116,6 +122,7 @@ namespace HySlam.Core.Slam
         private int framesSinceMotion;
 
         private int featureCount, matchCount, inlierCount, triangulatedCount;
+        private int structureCalls;
         private int processedFrames;
         private int lastKeyframeFrame;
 
@@ -262,6 +269,21 @@ namespace HySlam.Core.Slam
             keyframePoints = new List<Point2f>();
             currentPoints = new List<Point2f>();
 
+            int callIndex = processCalls++;
+            bool trace = callIndex < TracedCalls;
+
+            if (trace)
+            {
+                Log.Information(
+                    "ProcessFrame #{Call}: begin (size {Width}x{Height}, channels {Channels}, hasPrevious {HasPrevious}, previousPoints {PreviousPoints}).",
+                    callIndex,
+                    frame.Width,
+                    frame.Height,
+                    frame.Channels(),
+                    hasPreviousFrame,
+                    previousPoints.Count);
+            }
+
             Mat colorFrame = frame;
             if (hasDistortion && undistorted is not null && distortion is not null)
             {
@@ -274,6 +296,9 @@ namespace HySlam.Core.Slam
             else
                 colorFrame.CopyTo(gray);
 
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: grayscale ready.", callIndex);
+
             // Two masks: odometry only uses the near-field road band, while keyframes
             // and structure triangulation need the full drivable view.
             using var groundMask = BuildGroundMask();
@@ -281,14 +306,27 @@ namespace HySlam.Core.Slam
 
             if (!hasPreviousFrame || previousGray is null || previousPoints.Count < MinTrackedPoints)
             {
+                if (trace)
+                    Log.Information("ProcessFrame #{Call}: first frame path, detecting features.", callIndex);
+
                 DetectFeatures(groundMask);
                 ReplacePreviousFrame(previousPoints);
                 UpdatePoseFromState();
                 MaybeCreateKeyframe(structureMask);
+
+                if (trace)
+                    Log.Information("ProcessFrame #{Call}: first frame path done.", callIndex);
+
                 return false;
             }
 
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: tracking {Points} previous points.", callIndex, previousPoints.Count);
+
             var (prevTracked, currTracked) = TrackAndValidate(previousGray, gray, previousPoints, groundMask);
+
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: tracked {Tracked} points.", callIndex, currTracked.Count);
 
             featureCount = previousPoints.Count;
             matchCount = currTracked.Count;
@@ -342,14 +380,24 @@ namespace HySlam.Core.Slam
 
             UpdatePoseFromState();
 
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: pose updated (motionValid {MotionValid}).", callIndex, motionValid);
+
             if (motionValid)
                 AddRoadPoints(currTracked, inlierFlags, colorFrame);
+
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: road points added (total {Total}).", callIndex, map.Points.Count);
 
             // Run structure triangulation only every N frames; it is the most
             // expensive step and running it every frame causes UI stutter.
             triangulatedCount = (processedFrames % StructureUpdateInterval == 0)
                 ? AddStructurePoints(colorFrame)
                 : 0;
+
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: structure points added ({Added}).", callIndex, triangulatedCount);
+
             TrimMapIfNeeded();
 
             var camPos = currentPose.GetCameraPositionGL();
@@ -363,8 +411,14 @@ namespace HySlam.Core.Slam
             DetectFeatures(groundMask);
             ReplacePreviousFrame(previousPoints);
 
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: next point pool ready ({Points}).", callIndex, previousPoints.Count);
+
             processedFrames++;
             MaybeCreateKeyframe(structureMask);
+
+            if (trace)
+                Log.Information("ProcessFrame #{Call}: keyframe step done (id {KeyframeId}).", callIndex, keyframes.CurrentId);
 
             keyframePoints = prevTracked;
             currentPoints = currTracked;
@@ -869,18 +923,42 @@ namespace HySlam.Core.Slam
         private int AddStructurePoints(Mat colorFrame)
         {
             int totalAdded = 0;
+            int callIndex = structureCalls++;
+            bool trace = callIndex < TracedCalls;
+
+            var recentKeyframes = keyframes.Recent(maxStructureKeyframes);
+
+            if (trace)
+                Log.Information("AddStructurePoints #{Call}: {Keyframes} keyframes.", callIndex, recentKeyframes.Count);
 
             // Triangulate structure from the most recent keyframes (newest first).
             // Multiple baselines give a denser, more consistent cloud on complex city
             // roads and high-speed tracks where a single baseline is too short or too
             // noisy.
-            foreach (var keyframe in keyframes.Recent(maxStructureKeyframes))
+            foreach (var keyframe in recentKeyframes)
             {
                 if (keyframe.Gray is null || keyframe.Points2D.Count < KeyframeManager.MinKeyframePoints)
+                {
+                    if (trace)
+                        Log.Information(
+                            "AddStructurePoints #{Call}: keyframe {Id} skipped (gray {HasGray}, points {Points}).",
+                            callIndex,
+                            keyframe.Id,
+                            keyframe.Gray is not null,
+                            keyframe.Points2D.Count);
                     continue;
+                }
 
                 using var structureMask = BuildTrackingMask();
                 var (from, to) = TrackAndValidate(keyframe.Gray, gray, keyframe.Points2D, structureMask);
+
+                if (trace)
+                    Log.Information(
+                        "AddStructurePoints #{Call}: keyframe {Id} tracked {Tracked} points.",
+                        callIndex,
+                        keyframe.Id,
+                        from.Count);
+
                 if (from.Count < 12)
                     continue;
 
@@ -902,7 +980,13 @@ namespace HySlam.Core.Slam
                 using var proj2 = CreateProjectionMatrix(relativeRotation, relativeTranslation);
                 using var points4D = new Mat();
 
+                if (trace)
+                    Log.Information("AddStructurePoints #{Call}: triangulating {Count} points.", callIndex, from.Count);
+
                 Cv2.TriangulatePoints(proj1, proj2, p1, p2, points4D);
+
+                if (trace)
+                    Log.Information("AddStructurePoints #{Call}: triangulation done.", callIndex);
 
                 var camera2In1 = new double[3];
                 for (int r = 0; r < 3; r++)
