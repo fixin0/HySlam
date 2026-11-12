@@ -66,7 +66,7 @@ namespace HySlam.Core.Slam
             };
 
             foreach (var kp in kps) newKf.Points2D.Add(kp.Pt);
-
+            
             // Keep only the most recent keyframes so memory stays bounded.
             if (keyframes.Count >= MaxKeyframeHistory)
             {
@@ -74,7 +74,6 @@ namespace HySlam.Core.Slam
                 keyframes.RemoveAt(0);
             }
 
-            currentKeyframe?.Dispose();
             currentKeyframe = newKf;
             keyframes.Add(newKf);
             return true;
