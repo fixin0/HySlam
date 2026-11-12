@@ -457,12 +457,29 @@ option overrides the preset value (`--preset:city --band-top 0.74` is valid).
 | Preset | `--min-depth` / `--max-depth` | `--structure-depth` | `--band-top` / `--band-bottom` | `--keyframe-frames` | `--max-step` | `--pitch` | `--lk-window` / `--lk-levels` / `--lk-error` |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `road` | `6` / `26` m | `45` m | `0.70` / `0.99` | `30` | `3.0` m | horizon | `21` / `3` / `20` |
-| `highway` | `10` / `55` m | `120` m | `0.68` / `0.86` | `12` | `12.0` m | horizon | `27` / `4` / `30` |
-| `fast` | `15` / `80` m | `160` m | `0.67` / `0.80` | `8` | `25.0` m | horizon | `31` / `4` / `40` |
+| `highway` | `10` / `55` m | `120` m | `0.68` / `0.86` | `12` | `10.0` m | horizon | `27` / `4` / `30` |
+| `fast` | `12` / `70` m | `120` m | `0.65` / `0.82` | `6` | `15.0` m | horizon | `31` / `4` / `35` |
 | `mountain` | `5` / `30` m | `70` m | `0.70` / `0.99` | `25` | `4.0` m | horizon | `21` / `3` / `25` |
-| `city` | `4` / `20` m | `45` m | `0.76` / `0.97` | `12` | `2.0` m | horizon | `21` / `3` / `20` |
+| `city` | `3` / `18` m | `40` m | `0.72` / `0.98` | `10` | `3.0` m | horizon | `21` / `3` / `20` |
 | `office` | `1.5` / `9` m | `18` m | `0.72` / `0.96` | `8` | `0.8` m | `5 deg` down | `21` / `3` / `20` |
 | `home` | `1.2` / `7` m | `12` m | `0.78` / `0.97` | `8` | `0.6` m | `5 deg` down | `21` / `3` / `20` |
+
+### Motion prediction (always on)
+
+A short history of recent yaw and translation steps is kept. Before trusting a
+planar-motion estimate, it is compared against the constant-velocity forecast:
+
+- **High-speed tracks:** the forecast prevents a single bad LK match from jumping
+  the camera tens of meters. Estimates that deviate beyond `maxTranslationStep * 1.5`
+  are rejected.
+- **Low-texture segments:** when no usable fit exists, the smoothed prediction is
+  applied so the trajectory does not freeze.
+
+### Multi-keyframe structure
+
+Structure points are triangulated from the last three keyframes instead of a
+single one. Multiple baselines give a denser and more consistent point cloud on
+complex city roads where a single baseline is too short or too noisy.
 
 Why the values differ:
 

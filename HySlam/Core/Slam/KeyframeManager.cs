@@ -1,4 +1,5 @@
 using OpenCvSharp;
+using System.Collections.Generic;
 
 namespace HySlam.Core.Slam
 {
@@ -8,13 +9,22 @@ namespace HySlam.Core.Slam
         public List<Point2f> Points2D = new();
         public Mat? Gray;
         public CameraPose Pose = new();
+        public Mat? Descriptors;
+
+        public void Dispose()
+        {
+            Gray?.Dispose();
+            Descriptors?.Dispose();
+        }
     }
 
     internal sealed class KeyframeManager : IDisposable
     {
         public const int MinKeyframePoints = 50;
+        private const int MaxKeyframeHistory = 8;
 
         private readonly ORB orb;
+        private readonly List<Keyframe> keyframes = new();
         private Keyframe? currentKeyframe;
         private int nextKeyframeId = 1;
 
@@ -26,6 +36,18 @@ namespace HySlam.Core.Slam
         public Keyframe? Current => currentKeyframe;
 
         public int CurrentId => currentKeyframe?.Id ?? -1;
+
+        /// <summary>
+        /// Returns the most recent keyframes (including the current one), newest first.
+        /// </summary>
+        public IReadOnlyList<Keyframe> Recent(int count)
+        {
+            int take = System.Math.Clamp(count, 1, keyframes.Count);
+            var result = new List<Keyframe>(take);
+            for (int i = keyframes.Count - 1; i >= 0 && result.Count < take; i--)
+                result.Add(keyframes[i]);
+            return result;
+        }
 
         public bool CreateNewKeyframe(Mat gray, Mat mask, CameraPose worldPose)
         {
@@ -39,19 +61,30 @@ namespace HySlam.Core.Slam
             {
                 Id = nextKeyframeId++,
                 Gray = gray.Clone(),
-                Pose = worldPose.Clone()
+                Pose = worldPose.Clone(),
+                Descriptors = descriptors
             };
 
             foreach (var kp in kps) newKf.Points2D.Add(kp.Pt);
 
-            currentKeyframe?.Gray?.Dispose();
+            // Keep only the most recent keyframes so memory stays bounded.
+            if (keyframes.Count >= MaxKeyframeHistory)
+            {
+                keyframes[0].Dispose();
+                keyframes.RemoveAt(0);
+            }
+
+            currentKeyframe?.Dispose();
             currentKeyframe = newKf;
+            keyframes.Add(newKf);
             return true;
         }
 
         public void Dispose()
         {
-            currentKeyframe?.Gray?.Dispose();
+            foreach (var kf in keyframes) kf.Dispose();
+            keyframes.Clear();
+            currentKeyframe = null;
             orb.Dispose();
         }
     }

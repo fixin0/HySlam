@@ -55,6 +55,7 @@ namespace HySlam.Core.Slam
 
         private readonly MapData map;
         private readonly KeyframeManager keyframes;
+        private readonly MotionPredictor motionPredictor = new();
         private readonly VoxelGrid spatialIndex = new();
         private readonly CameraPose currentPose = new();
         private readonly Mat gray = new();
@@ -79,6 +80,12 @@ namespace HySlam.Core.Slam
         private double groundBandBottom = 0.99;
         private int maxFramesPerKeyframe = DefaultMaxFramesPerKeyframe;
         private double maxTranslationStep = DefaultMaxTranslationStep;
+        private int maxStructureKeyframes = MaxStructureKeyframes;
+
+        // Multi-keyframe structure: triangulate structure points from the last N
+        // keyframes instead of a single one. This makes the map denser and more
+        // consistent on complex city roads and high-speed tracks.
+        private const int MaxStructureKeyframes = 3;
 
         // Lucas-Kanade parameters. A high-speed clip needs a wider window and one
         // more pyramid level, otherwise the per-frame displacement exceeds the
@@ -146,7 +153,8 @@ namespace HySlam.Core.Slam
             double maxTranslationStep = DefaultMaxTranslationStep,
             int lkWindowSize = 21,
             int lkLevels = 3,
-            double maxLkError = DefaultMaxLkError)
+            double maxLkError = DefaultMaxLkError,
+            int maxStructureKeyframes = MaxStructureKeyframes)
         {
             var calib = (calibration ?? CameraCalibration.Estimate(width, height, horizontalFovDegrees))
                 .ScaledTo(width, height);
@@ -191,6 +199,7 @@ namespace HySlam.Core.Slam
             this.groundBandBottom = Math.Clamp(groundBandBottom, this.groundBandTop + 0.05, 1.0);
             this.maxFramesPerKeyframe = maxFramesPerKeyframe > 0 ? maxFramesPerKeyframe : DefaultMaxFramesPerKeyframe;
             this.maxTranslationStep = maxTranslationStep > 0 ? maxTranslationStep : DefaultMaxTranslationStep;
+            this.maxStructureKeyframes = maxStructureKeyframes > 0 ? maxStructureKeyframes : MaxStructureKeyframes;
             this.lkWindowSize = lkWindowSize >= 5 ? lkWindowSize : 21;
             this.lkLevels = Math.Clamp(lkLevels, 0, 6);
             this.maxLkError = maxLkError > 0 ? maxLkError : DefaultMaxLkError;
@@ -230,6 +239,8 @@ namespace HySlam.Core.Slam
             processedFrames = 0;
             lastKeyframeFrame = -maxFramesPerKeyframe;
             rngState = 0x9E3779B97F4A7C15UL;
+
+            motionPredictor.Reset();
 
             previousGray?.Dispose();
             previousGray = null;
@@ -283,25 +294,46 @@ namespace HySlam.Core.Slam
             bool motionValid = false;
             bool[] inlierFlags = Array.Empty<bool>();
 
+            // Forecast the next motion from the recent history. On fast footage the
+            // inter-frame displacement can be large; the forecast helps decide whether
+            // a planar fit is a genuine motion estimate or an outlier.
+            var (predYaw, predStepX, predStepZ) = motionPredictor.Forecast();
+            bool hasForecast = motionPredictor.HasPrediction;
+
             if (prevTracked.Count >= MinTrackedPoints)
             {
                 motionValid = EstimatePlanarMotion(
                     prevTracked, currTracked, out double yawStep, out double tx, out double tz,
-                    out int inliers, out inlierFlags);
+                    out int inliers, out inlierFlags, hasForecast, predYaw, predStepX, predStepZ);
 
                 if (motionValid)
                 {
-                    ApplyMotion(yawStep, tx, tz);
-                    inlierCount = inliers;
-                    hasLastMotion = true;
-                    framesSinceMotion = 0;
+                    // Trust the estimate only if it agrees with the prediction (or there
+                    // is no prediction yet). Otherwise reject it as a tracking outlier.
+                    bool predictionAgrees = !hasForecast ||
+                        motionPredictor.Observe(yawStep, tx, tz, maxTranslationStep * 1.5);
+
+                    if (predictionAgrees)
+                    {
+                        ApplyMotion(yawStep, tx, tz);
+                        inlierCount = inliers;
+                        hasLastMotion = true;
+                        framesSinceMotion = 0;
+                    }
+                    else
+                    {
+                        motionValid = false;
+                    }
                 }
             }
 
             if (!motionValid && hasLastMotion && framesSinceMotion < MaxPredictedFrames)
             {
+                // No usable fit this frame. Fall back to the smoothed prediction so the
+                // trajectory does not freeze on high-speed or low-texture segments.
                 ApplySmoothedStep();
                 framesSinceMotion++;
+                motionPredictor.Observe(smoothedYawStep, smoothedStepX, smoothedStepZ, maxTranslationStep * 2.0);
             }
 
             UpdatePoseFromState();
@@ -462,7 +494,11 @@ namespace HySlam.Core.Slam
             out double tx,
             out double tz,
             out int inliers,
-            out bool[] inlierFlags)
+            out bool[] inlierFlags,
+            bool hasForecast = false,
+            double predYaw = 0.0,
+            double predStepX = 0.0,
+            double predStepZ = 0.0)
         {
             theta = tx = tz = 0.0;
             inliers = 0;
@@ -573,6 +609,26 @@ namespace HySlam.Core.Slam
             double ratio = bestCount / (double)n;
             if (ratio < MinInlierRatio)
                 return false;
+
+            // When a forecast exists, reject estimates that deviate too far from the
+            // predicted constant-velocity motion. This stops tracking outliers (for
+            // example a wall mistaken for the road on a fast city stretch) from
+            // corrupting the trajectory.
+            if (hasForecast)
+            {
+                double estYawDegrees = Math.Abs(theta) * 180.0 / Math.PI;
+                double predYawDegrees = Math.Abs(predYaw) * 180.0 / Math.PI;
+                double yawDiff = Math.Abs(WrapAngleDeg(estYawDegrees - predYawDegrees));
+                const double maxYawDiffDeg = 25.0;
+
+                double estStep = Math.Sqrt(tx * tx + tz * tz);
+                double predStep = Math.Sqrt(predStepX * predStepX + predStepZ * predStepZ);
+                double stepDiff = Math.Abs(estStep - predStep);
+                const double maxStepDiffMeters = 6.0;
+
+                if (yawDiff > maxYawDiffDeg || stepDiff > maxStepDiffMeters)
+                    return false;
+            }
 
             inliers = bestCount;
 
@@ -804,103 +860,116 @@ namespace HySlam.Core.Slam
 
         private int AddStructurePoints(Mat colorFrame)
         {
-            var keyframe = keyframes.Current;
-            if (keyframe?.Gray is null || keyframe.Points2D.Count < KeyframeManager.MinKeyframePoints)
-                return 0;
+            int totalAdded = 0;
 
-            using var structureMask = BuildTrackingMask();
-            var (from, to) = TrackAndValidate(keyframe.Gray, gray, keyframe.Points2D, structureMask);
-            if (from.Count < 12)
-                return 0;
-
-            var (relativeRotation, relativeTranslation) = ComputeRelativePose(keyframe.Pose, currentPose);
-
-            double translationLength = Math.Sqrt(
-                relativeTranslation[0] * relativeTranslation[0] +
-                relativeTranslation[1] * relativeTranslation[1] +
-                relativeTranslation[2] * relativeTranslation[2]);
-
-            // With a (near) zero baseline triangulation is pure noise.
-            if (translationLength < 1e-3)
-                return 0;
-
-            using var p1 = Mat.FromArray(from.ToArray());
-            using var p2 = Mat.FromArray(to.ToArray());
-            using var proj1 = CreateProjectionMatrix(
-                new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, new double[3]);
-            using var proj2 = CreateProjectionMatrix(relativeRotation, relativeTranslation);
-            using var points4D = new Mat();
-
-            Cv2.TriangulatePoints(proj1, proj2, p1, p2, points4D);
-
-            var camera2In1 = new double[3];
-            for (int r = 0; r < 3; r++)
-                for (int k = 0; k < 3; k++)
-                    camera2In1[r] -= relativeRotation[k, r] * relativeTranslation[k];
-
-            int added = 0;
-
-            for (int i = 0; i < from.Count && added < MaxStructurePointsPerFrame; i++)
+            // Triangulate structure from the most recent keyframes (newest first).
+            // Multiple baselines give a denser, more consistent cloud on complex city
+            // roads and high-speed tracks where a single baseline is too short or too
+            // noisy.
+            foreach (var keyframe in keyframes.Recent(maxStructureKeyframes))
             {
-                float w = points4D.At<float>(3, i);
-                if (Math.Abs(w) < 1e-5f) continue;
+                if (keyframe.Gray is null || keyframe.Points2D.Count < KeyframeManager.MinKeyframePoints)
+                    continue;
 
-                double x = points4D.At<float>(0, i) / w;
-                double y = points4D.At<float>(1, i) / w;
-                double z = points4D.At<float>(2, i) / w;
+                using var structureMask = BuildTrackingMask();
+                var (from, to) = TrackAndValidate(keyframe.Gray, gray, keyframe.Points2D, structureMask);
+                if (from.Count < 12)
+                    continue;
 
-                if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z)) continue;
-                if (z <= MinStructureDepth || z > maxStructureDepth) continue;
+                var (relativeRotation, relativeTranslation) = ComputeRelativePose(keyframe.Pose, currentPose);
 
-                double xc = relativeRotation[0, 0] * x + relativeRotation[0, 1] * y + relativeRotation[0, 2] * z + relativeTranslation[0];
-                double yc = relativeRotation[1, 0] * x + relativeRotation[1, 1] * y + relativeRotation[1, 2] * z + relativeTranslation[1];
-                double zc = relativeRotation[2, 0] * x + relativeRotation[2, 1] * y + relativeRotation[2, 2] * z + relativeTranslation[2];
-                if (zc <= MinStructureDepth) continue;
+                double translationLength = Math.Sqrt(
+                    relativeTranslation[0] * relativeTranslation[0] +
+                    relativeTranslation[1] * relativeTranslation[1] +
+                    relativeTranslation[2] * relativeTranslation[2]);
 
-                double dx = x - camera2In1[0], dy = y - camera2In1[1], dz = z - camera2In1[2];
-                double n1 = Math.Sqrt(x * x + y * y + z * z);
-                double n2 = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (n1 < 1e-6 || n2 < 1e-6) continue;
+                // With a (near) zero baseline triangulation is pure noise.
+                if (translationLength < 1e-3)
+                    continue;
 
-                double cosAngle = (x * dx + y * dy + z * dz) / (n1 * n2);
-                double parallaxDegrees = Math.Acos(Math.Clamp(cosAngle, -1, 1)) * 180.0 / Math.PI;
-                if (parallaxDegrees < MinParallaxDeg) continue;
+                using var p1 = Mat.FromArray(from.ToArray());
+                using var p2 = Mat.FromArray(to.ToArray());
+                using var proj1 = CreateProjectionMatrix(
+                    new double[,] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } }, new double[3]);
+                using var proj2 = CreateProjectionMatrix(relativeRotation, relativeTranslation);
+                using var points4D = new Mat();
 
-                double u1 = fx * x / z + cx, v1 = fy * y / z + cy;
-                double e1x = u1 - from[i].X, e1y = v1 - from[i].Y;
-                if (e1x * e1x + e1y * e1y > MaxReprojErrPx * MaxReprojErrPx) continue;
+                Cv2.TriangulatePoints(proj1, proj2, p1, p2, points4D);
 
-                double u2 = fx * xc / zc + cx, v2 = fy * yc / zc + cy;
-                double e2x = u2 - to[i].X, e2y = v2 - to[i].Y;
-                if (e2x * e2x + e2y * e2y > MaxReprojErrPx * MaxReprojErrPx) continue;
+                var camera2In1 = new double[3];
+                for (int r = 0; r < 3; r++)
+                    for (int k = 0; k < 3; k++)
+                        camera2In1[r] -= relativeRotation[k, r] * relativeTranslation[k];
 
-                double wx = keyframe.Pose.Rotation[0, 0] * x + keyframe.Pose.Rotation[0, 1] * y + keyframe.Pose.Rotation[0, 2] * z + keyframe.Pose.Translation[0];
-                double wy = keyframe.Pose.Rotation[1, 0] * x + keyframe.Pose.Rotation[1, 1] * y + keyframe.Pose.Rotation[1, 2] * z + keyframe.Pose.Translation[1];
-                double wz = keyframe.Pose.Rotation[2, 0] * x + keyframe.Pose.Rotation[2, 1] * y + keyframe.Pose.Rotation[2, 2] * z + keyframe.Pose.Translation[2];
+                int perKeyframeLimit = MaxStructurePointsPerFrame / maxStructureKeyframes;
+                if (perKeyframeLimit < 1) perKeyframeLimit = 1;
 
-                // World y points down, so structure above the road has y < 0.
-                if (wy > -MinStructureHeight) continue;
-                // Reject points far from the camera: at long range the triangulated
-                // depth is too uncertain and the cloud turns into a lateral spray.
-                if (Math.Abs(wx - centerX) > 30.0 || Math.Abs(wz - centerZ) > 80.0) continue;
+                int added = 0;
 
-                float glx = (float)wx;
-                float gly = (float)-wy;
-                float glz = (float)-wz;
-
-                if (spatialIndex.IsTooClose(map.Points, glx, gly, glz)) continue;
-
-                AddMapPoint(new MapPoint
+                for (int i = 0; i < from.Count && added < perKeyframeLimit; i++)
                 {
-                    Position = new GLVector3(glx, gly, glz),
-                    Color = SampleColor(colorFrame, to[i]),
-                    Observations = 1
-                });
+                    float w = points4D.At<float>(3, i);
+                    if (Math.Abs(w) < 1e-5f) continue;
 
-                added++;
+                    double x = points4D.At<float>(0, i) / w;
+                    double y = points4D.At<float>(1, i) / w;
+                    double z = points4D.At<float>(2, i) / w;
+
+                    if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z)) continue;
+                    if (z <= MinStructureDepth || z > maxStructureDepth) continue;
+
+                    double xc = relativeRotation[0, 0] * x + relativeRotation[0, 1] * y + relativeRotation[0, 2] * z + relativeTranslation[0];
+                    double yc = relativeRotation[1, 0] * x + relativeRotation[1, 1] * y + relativeRotation[1, 2] * z + relativeTranslation[1];
+                    double zc = relativeRotation[2, 0] * x + relativeRotation[2, 1] * y + relativeRotation[2, 2] * z + relativeTranslation[2];
+                    if (zc <= MinStructureDepth) continue;
+
+                    double dx = x - camera2In1[0], dy = y - camera2In1[1], dz = z - camera2In1[2];
+                    double n1 = Math.Sqrt(x * x + y * y + z * z);
+                    double n2 = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                    if (n1 < 1e-6 || n2 < 1e-6) continue;
+
+                    double cosAngle = (x * dx + y * dy + z * dz) / (n1 * n2);
+                    double parallaxDegrees = Math.Acos(Math.Clamp(cosAngle, -1, 1)) * 180.0 / Math.PI;
+                    if (parallaxDegrees < MinParallaxDeg) continue;
+
+                    double u1 = fx * x / z + cx, v1 = fy * y / z + cy;
+                    double e1x = u1 - from[i].X, e1y = v1 - from[i].Y;
+                    if (e1x * e1x + e1y * e1y > MaxReprojErrPx * MaxReprojErrPx) continue;
+
+                    double u2 = fx * xc / zc + cx, v2 = fy * yc / zc + cy;
+                    double e2x = u2 - to[i].X, e2y = v2 - to[i].Y;
+                    if (e2x * e2x + e2y * e2y > MaxReprojErrPx * MaxReprojErrPx) continue;
+
+                    double wx = keyframe.Pose.Rotation[0, 0] * x + keyframe.Pose.Rotation[0, 1] * y + keyframe.Pose.Rotation[0, 2] * z + keyframe.Pose.Translation[0];
+                    double wy = keyframe.Pose.Rotation[1, 0] * x + keyframe.Pose.Rotation[1, 1] * y + keyframe.Pose.Rotation[1, 2] * z + keyframe.Pose.Translation[1];
+                    double wz = keyframe.Pose.Rotation[2, 0] * x + keyframe.Pose.Rotation[2, 1] * y + keyframe.Pose.Rotation[2, 2] * z + keyframe.Pose.Translation[2];
+
+                    // World y points down, so structure above the road has y < 0.
+                    if (wy > -MinStructureHeight) continue;
+                    // Reject points far from the camera: at long range the triangulated
+                    // depth is too uncertain and the cloud turns into a lateral spray.
+                    if (Math.Abs(wx - centerX) > 30.0 || Math.Abs(wz - centerZ) > 80.0) continue;
+
+                    float glx = (float)wx;
+                    float gly = (float)-wy;
+                    float glz = (float)-wz;
+
+                    if (spatialIndex.IsTooClose(map.Points, glx, gly, glz)) continue;
+
+                    AddMapPoint(new MapPoint
+                    {
+                        Position = new GLVector3(glx, gly, glz),
+                        Color = SampleColor(colorFrame, to[i]),
+                        Observations = 1
+                    });
+
+                    added++;
+                }
+
+                totalAdded += added;
             }
 
-            return added;
+            return totalAdded;
         }
 
         private static GLVector3 SampleColor(Mat colorFrame, Point2f point)
@@ -1053,6 +1122,16 @@ namespace HySlam.Core.Slam
             using var empty = new Mat();
             Cv2.Gemm(intrinsic, extrinsic, 1.0, empty, 0.0, projection);
             return projection;
+        }
+
+        /// <summary>
+        /// Wraps an angle to the [-180, 180] interval.
+        /// </summary>
+        private static double WrapAngleDeg(double degrees)
+        {
+            while (degrees > 180.0) degrees -= 360.0;
+            while (degrees < -180.0) degrees += 360.0;
+            return degrees;
         }
 
         private int NextRandom(int bound)

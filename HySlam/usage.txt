@@ -32,10 +32,10 @@ Options can also be separated from their values:
 Scene presets (explicit options always override preset values):
   preset    depth (m)  structure  band        keyframe  step (m)  pitch   LK
   road      6 - 26     45         0.70-0.99   30        3.0       auto    21/3/20
-  highway   10 - 55    120        0.68-0.86   12        12.0      auto    27/4/30
-  fast      15 - 80    160        0.67-0.80   8         25.0      auto    31/4/40
+  highway   10 - 55    120        0.68-0.86   12        10.0      auto    27/4/30
+  fast      12 - 70    120        0.65-0.82   6         15.0      auto    31/4/35
   mountain  5 - 30     70         0.70-0.99   25        4.0       auto    21/3/25
-  city      4 - 20     45         0.76-0.97   12        2.0       auto    21/3/20
+  city      3 - 18     40         0.72-0.98   10        3.0       auto    21/3/20
   office    1.5 - 9    18         0.72-0.96   8         0.8       5 deg   21/3/20
   home      1.2 - 7    12         0.78-0.97   8         0.6       5 deg   21/3/20
 
@@ -48,6 +48,12 @@ Scene presets (explicit options always override preset values):
   the LK search range; on slow footage it underestimates the path. 'home' and
   'office' assume a hand-held camera looking slightly down (pitch defaults to
   5 degrees) and a floor visible in the lower part of the frame.
+
+  Motion prediction is always active. It forecasts the next camera step from the
+  recent history and rejects tracking outliers that deviate too far, which helps
+  on high-speed and low-texture footage. Structure points are triangulated from
+  the last three keyframes (multi-keyframe), giving a denser map on complex
+  city roads.
 
 Metric scale:
   The planar odometry assumes the camera moves on a flat road and projects road
