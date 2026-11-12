@@ -11,6 +11,10 @@ namespace HySlam.Core.Rendering
         private readonly Shader shader;
         private readonly int vao, vbo;
 
+        // Cached buffer upload: skip GL.BufferData when nothing changed since last frame.
+        private int lastPointCount;
+        private int lastTrajCount;
+
         // Free camera (orbit) variables
         private float freeCamYaw = 45f;
         private float freeCamPitch = 30f;
@@ -107,9 +111,17 @@ namespace HySlam.Core.Rendering
             }
             int trajCount = map.Trajectory.Count;
 
-            GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, (lines.Count + points.Count) * sizeof(float),
-                CombineLists(lines, points), BufferUsageHint.DynamicDraw);
+            // Only re-upload the big point cloud when it actually changed. The line
+            // geometry (grid + frustum) is small and re-uploaded every frame.
+            bool pointsChanged = pointCount != lastPointCount || trajCount != lastTrajCount;
+            if (pointsChanged)
+            {
+                GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
+                GL.BufferData(BufferTarget.ArrayBuffer, (lines.Count + points.Count) * sizeof(float),
+                    CombineLists(lines, points), BufferUsageHint.DynamicDraw);
+                lastPointCount = pointCount;
+                lastTrajCount = trajCount;
+            }
 
             GLVector3 eye, target, up;
             Matrix4 projection;

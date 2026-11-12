@@ -53,6 +53,10 @@ namespace HySlam.Core.Slam
         private const int MaxStructurePointsPerFrame = 220;
         private const int MaxMapPoints = 150000;
 
+        // Structure triangulation is the most expensive step; run it every N frames
+        // instead of every frame to keep the UI responsive on long clips.
+        private const int StructureUpdateInterval = 3;
+
         private readonly MapData map;
         private readonly KeyframeManager keyframes;
         private readonly MotionPredictor motionPredictor = new();
@@ -341,7 +345,11 @@ namespace HySlam.Core.Slam
             if (motionValid)
                 AddRoadPoints(currTracked, inlierFlags, colorFrame);
 
-            triangulatedCount = AddStructurePoints(colorFrame);
+            // Run structure triangulation only every N frames; it is the most
+            // expensive step and running it every frame causes UI stutter.
+            triangulatedCount = (processedFrames % StructureUpdateInterval == 0)
+                ? AddStructurePoints(colorFrame)
+                : 0;
             TrimMapIfNeeded();
 
             var camPos = currentPose.GetCameraPositionGL();
