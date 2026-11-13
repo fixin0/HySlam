@@ -268,6 +268,17 @@ namespace HySlam.Core
             framesRead++;
             frameIndex++;
 
+            // Show the source video with the active-lane overlay. This runs for
+            // every decoded frame so the preview stays smooth even when SLAM only
+            // processes every third frame.
+            if (options.ShowVideo)
+            {
+                using var annotated = capture.Frame.Clone();
+                slam.DrawLaneOverlay(annotated);
+                Cv2.ImShow("HySlam Lane", annotated);
+                Cv2.WaitKey(1);
+            }
+
             if (frameIndex % FrameSkip != 0)
             {
                 FinishIfFrameLimitReached();

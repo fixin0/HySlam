@@ -1272,6 +1272,117 @@ namespace HySlam.Core.Slam
             return totalAdded;
         }
 
+        /// <summary>
+        /// Draws the ego lane corridor on a BGR frame. The lane is projected from
+        /// the current metric pose onto the ground plane, so it shows the lane the
+        /// camera is currently in even when the road has no painted markings.
+        ///
+        /// The corridor is centred on the camera heading: two green boundaries at
+        /// +/- laneWidth/2 and a brighter centre line, plus a translucent fill.
+        /// </summary>
+        public void DrawLaneOverlay(
+            Mat frame,
+            double laneWidthMeters = 3.5,
+            double nearMeters = 2.0,
+            double farMeters = 30.0)
+        {
+            if (frame.Empty() || frame.Channels() < 3)
+                return;
+
+            double c = Math.Cos(heading);
+            double s = Math.Sin(heading);
+            double halfWidth = laneWidthMeters * 0.5;
+
+            var left = new List<Point>();
+            var right = new List<Point>();
+            var centre = new List<Point>();
+
+            const double step = 1.0;
+            for (double d = nearMeters; d <= farMeters; d += step)
+            {
+                // Ground-plane point ahead of the camera in world coordinates.
+                double wx = centerX + s * d;
+                double wz = centerZ + c * d;
+
+                // Camera-right vector projected onto the ground plane.
+                double rx = c;
+                double rz = -s;
+
+                var leftPoint = ProjectGroundPoint(wx - rx * halfWidth, wz - rz * halfWidth);
+                var rightPoint = ProjectGroundPoint(wx + rx * halfWidth, wz + rz * halfWidth);
+                var centrePoint = ProjectGroundPoint(wx, wz);
+
+                if (leftPoint is null || rightPoint is null || centrePoint is null)
+                    break; // behind the camera or outside the frame
+
+                left.Add(leftPoint.Value);
+                right.Add(rightPoint.Value);
+                centre.Add(centrePoint.Value);
+            }
+
+            if (centre.Count < 2)
+                return;
+
+            var green = new Scalar(0, 255, 0);
+            var darkGreen = new Scalar(0, 190, 0);
+
+            // Translucent lane fill.
+            var polygon = new List<Point>(left.Count + right.Count);
+            polygon.AddRange(left);
+            for (int i = right.Count - 1; i >= 0; i--)
+                polygon.Add(right[i]);
+
+            using (var overlay = frame.Clone())
+            {
+                Cv2.FillPoly(overlay, new[] { polygon.ToArray() }, green);
+                Cv2.AddWeighted(overlay, 0.15, frame, 0.85, 0, frame);
+            }
+
+            Cv2.Polylines(frame, new[] { left.ToArray() }, false, darkGreen, 2);
+            Cv2.Polylines(frame, new[] { right.ToArray() }, false, darkGreen, 2);
+            Cv2.Polylines(frame, new[] { centre.ToArray() }, false, green, 3);
+
+            var labelOrigin = new Point(
+                Math.Clamp(centre[0].X - 60, 4, frame.Cols - 140),
+                Math.Max(20, centre[0].Y - 20));
+            Cv2.PutText(
+                frame,
+                "ACTIVE LANE",
+                labelOrigin,
+                HersheyFonts.HersheySimplex,
+                0.6,
+                green,
+                2);
+        }
+
+        /// <summary>
+        /// Projects a world-space road point (world y = 0) into the current frame.
+        /// Returns null only when the point is behind the camera; points outside the
+        /// image are kept so OpenCV can clip the lane polyline at the frame edge.
+        /// </summary>
+        private Point? ProjectGroundPoint(double wx, double wz)
+        {
+            var R = currentPose.Rotation;
+            var t = currentPose.Translation;
+
+            double x = wx, y = 0.0, z = wz;
+
+            double xc = R[0, 0] * (x - t[0]) + R[1, 0] * (y - t[1]) + R[2, 0] * (z - t[2]);
+            double yc = R[0, 1] * (x - t[0]) + R[1, 1] * (y - t[1]) + R[2, 1] * (z - t[2]);
+            double zc = R[0, 2] * (x - t[0]) + R[1, 2] * (y - t[1]) + R[2, 2] * (z - t[2]);
+
+            if (zc <= 0.5)
+                return null;
+
+            double u = fx * xc / zc + cx;
+            double v = fy * yc / zc + cy;
+
+            if (!double.IsFinite(u) || !double.IsFinite(v))
+                return null;
+
+            return new Point((int)Math.Round(u), (int)Math.Round(v));
+        }
+
         private static GLVector3 SampleColor(Mat colorFrame, Point2f point)
         {
             int px = Math.Clamp((int)Math.Round(point.X), 0, colorFrame.Cols - 1);

@@ -132,6 +132,12 @@ namespace HySlam.Core
         public bool ShowGrid { get; init; }
 
         /// <summary>
+        /// Show the source video in a separate window with the active lane overlay.
+        /// Enabled by default for interactive runs; use --no-video to disable it.
+        /// </summary>
+        public bool ShowVideo { get; init; } = true;
+
+        /// <summary>
         /// Offline bake configuration. When set the program runs headless, processes
         /// the clip several times and writes the best result to the bake directory
         /// instead of opening the interactive window.

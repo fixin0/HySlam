@@ -237,6 +237,7 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | `--loop-closure` | flag | off | no value | Enable loop closure detection and drift correction. Opt-in because repetitive road texture on a forward-driving clip can produce false positives |
 | `--color-mode` | name | `height` | `height`, `sampled`, `semantic`, `confidence` | Point colour palette. `height` is the LiDAR-style Turbo ramp; `sampled` keeps the video colours |
 | `--grid` | flag | off | no value | Show the ground grid and height axis. Hidden by default for a clean point-cloud view |
+| `--no-video` | flag | off | no value | Do not open the source-video window with the active-lane overlay |
 | `--camera-height` | meters | `1.3` | `> 0` | Camera height above the road. Sets the metric scale of the whole trajectory |
 | `--pitch` | degrees | horizon-derived | `-45 .. 45` | Camera tilt; positive looks down. Indoor presets default to `5` when the option is omitted |
 | `--fov` | degrees | fallback `fx = fy = 1.1 * width` | `> 0` and `< 180` | Horizontal FOV for the fallback intrinsics. Omit it to keep the width-based fallback; a value of `0` is rejected |
@@ -829,8 +830,11 @@ pacing is disabled in this mode; one source frame is read per update.
 | `Esc` | Quit |
 
 The interactive viewer is a single full-window free camera. There is no separate
-top-down view and no OpenCV preview window. The `--load` viewer uses the same
-controls and frames the complete map when it opens.
+top-down view. A second window shows the source video with the active lane drawn
+as a green corridor (two boundaries, a centre line and a translucent fill); use
+`--no-video` to hide it. The lane is projected from the current metric pose onto
+the ground plane, so it also works on roads without painted markings. The
+`--load` viewer uses the same controls and frames the complete map when it opens.
 
 ## Pipeline
 

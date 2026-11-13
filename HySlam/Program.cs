@@ -208,6 +208,7 @@ namespace HySlam
             bool loopClosure = false;
             RenderColorMode colorMode = RenderColorMode.Height;
             bool showGrid = false;
+            bool showVideo = true;
             bool bake = false;
             bool bakeOptionUsed = false;
             int bakePasses = 5;
@@ -322,6 +323,16 @@ namespace HySlam
                             }
 
                             showGrid = true;
+                            break;
+
+                        case "--no-video":
+                            if (!string.IsNullOrEmpty(inlineValue))
+                            {
+                                Log.Error("Error: '--no-video' does not take a value.");
+                                return ParseResult.Error;
+                            }
+
+                            showVideo = false;
                             break;
 
                         case "--camera-height":
@@ -690,6 +701,7 @@ namespace HySlam
                 EnableLoopClosure = loopClosure,
                 ColorMode = colorMode,
                 ShowGrid = showGrid,
+                ShowVideo = showVideo,
                 CameraHeight = cameraHeight,
                 PitchDegrees = pitchDegrees,
                 HorizontalFovDegrees = horizontalFovDegrees,

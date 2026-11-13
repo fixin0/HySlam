@@ -16,6 +16,7 @@ Options:
   --loop-closure       Enable loop closure detection and drift correction (opt-in)
   --color-mode:<mode>  Point colour: height, sampled, semantic, confidence. Default: height
   --grid               Show the ground grid and height axis (hidden by default)
+  --no-video           Do not open the source-video window with the lane overlay
   --camera-height:<m>  Camera height above the road in meters. Default: 1.3
   --pitch:<deg>        Camera pitch override in degrees (positive looks down).
                        Default: derived from the road horizon (0.665 * frame height)
@@ -76,6 +77,11 @@ Scene presets (explicit options always override preset values):
   --color-mode:sampled for the original video colours, --color-mode:semantic for
   class colours, or --color-mode:confidence for the confidence palette. The
   ground grid and height axis are hidden by default; add --grid to show them.
+
+  Interactive runs also open a source-video window with the active lane drawn as
+  a green corridor (two boundaries, a centre line and a translucent fill). The
+  lane is projected from the current metric pose onto the ground plane, so it
+  works on roads without painted markings. Use --no-video to hide the window.
 
 Bake mode (--bake):
   Processes the whole video offline without opening the OpenGL window. The
