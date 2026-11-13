@@ -58,6 +58,16 @@ namespace HySlam.Core.Slam
             return result;
         }
 
+        /// <summary>
+        /// Returns all keyframes currently in the history. Some older keyframes may
+        /// have been disposed when the history limit was reached; their descriptors
+        /// are null but their pose data remains valid.
+        /// </summary>
+        public IReadOnlyList<Keyframe> GetAll()
+        {
+            return keyframes.AsReadOnly();
+        }
+
         public bool CreateNewKeyframe(Mat gray, Mat mask, CameraPose worldPose)
         {
             // The keyframe owns the descriptor matrix, so it must not be disposed here.

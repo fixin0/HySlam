@@ -69,6 +69,8 @@ namespace HySlam.Core.Slam
         private readonly CameraPose currentPose = new();
         private readonly Mat gray = new();
         private LocalBundleAdjuster bundleAdjuster = null!;
+        private LoopClosureDetector loopClosure = null!;
+        private bool loopClosureCorrected;
 
         private Mat cameraMatrix = null!;
         private Mat? distortion;
@@ -304,6 +306,8 @@ namespace HySlam.Core.Slam
                 (int)width,
                 (int)height,
                 fx, fy, cx, cy);
+
+            loopClosure = new LoopClosureDetector();
         }
 
         /// <summary>
@@ -511,7 +515,27 @@ namespace HySlam.Core.Slam
                 Log.Information("ProcessFrame #{Call}: next point pool ready ({Points}).", callIndex, previousPoints.Count);
 
             processedFrames++;
-            MaybeCreateKeyframe(structureMask);
+            bool newKeyframe = MaybeCreateKeyframe(structureMask);
+
+            // Check for loop closure when a new keyframe was created. If a previous
+            // keyframe is recognized, apply a global drift correction to the
+            // trajectory and map points after the matched keyframe.
+            if (newKeyframe && !loopClosureCorrected)
+            {
+                var currentKf = keyframes.Current;
+                if (currentKf is not null)
+                {
+                    var matched = loopClosure.Detect(currentKf);
+                    if (matched is not null)
+                    {
+                        // Compute the relative camera-to-camera transform from the
+                        // two stored poses: X_current = R_rel * X_matched + t_rel.
+                        var (rRel, tRel) = ComputeRelativePose(matched.Pose, currentKf.Pose);
+                        ApplyLoopClosureCorrection(matched, currentKf, rRel, tRel);
+                        loopClosureCorrected = true;
+                    }
+                }
+            }
 
             if (trace)
                 Log.Information("ProcessFrame #{Call}: keyframe step done (id {KeyframeId}).", callIndex, keyframes.CurrentId);
@@ -1237,7 +1261,7 @@ namespace HySlam.Core.Slam
             spatialIndex.Rebuild(map.Points);
         }
 
-        private void MaybeCreateKeyframe(Mat mask)
+        private bool MaybeCreateKeyframe(Mat mask)
         {
             var current = keyframes.Current;
             bool needsKeyframe =
@@ -1247,7 +1271,12 @@ namespace HySlam.Core.Slam
                 TranslationDistance(current.Pose, currentPose) >= 1.5;
 
             if (needsKeyframe && keyframes.CreateNewKeyframe(gray, mask, currentPose))
+            {
                 lastKeyframeFrame = processedFrames;
+                return true;
+            }
+
+            return false;
         }
 
         // ---------------------------------------------------------------------
@@ -1376,6 +1405,154 @@ namespace HySlam.Core.Slam
             return (int)(value % (ulong)bound);
         }
 
+        /// <summary>
+        /// Applies a global drift correction after a loop closure is detected.
+        ///
+        /// Given the matched (past) keyframe and the current keyframe, plus the
+        /// relative camera-to-camera transform measured between them, this computes
+        /// what the current pose should be and derives a delta rotation/translation.
+        /// The delta is then applied to every keyframe created after the matched one
+        /// and to every map point, pulling the drifted trajectory back into
+        /// alignment with the loop-closed position.
+        ///
+        /// This is a simplified global alignment (not a full pose graph optimizer),
+        /// but it removes most of the accumulated drift on looped trajectories.
+        /// </summary>
+        private void ApplyLoopClosureCorrection(
+            Keyframe matched,
+            Keyframe current,
+            double[,] rRel,
+            double[] tRel)
+        {
+            // Corrected current pose from the loop closure:
+            //   R_cw_corrected = R_pw * R_rel^T
+            //   t_cw_corrected = t_pw - R_pw * R_rel^T * t_rel
+            var Rpw = matched.Pose.Rotation;
+            var tpw = matched.Pose.Translation;
+
+            // R_rel^T
+            var rRelT = new double[3, 3];
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++)
+                    rRelT[i, j] = rRel[j, i];
+
+            // R_cw_corrected = R_pw * R_rel^T
+            var rCorrected = MultiplyMatrices(Rpw, rRelT);
+
+            // R_pw * R_rel^T * t_rel
+            var rRelTTimesTrel = MultiplyMatrixVector(rRelT, tRel);
+            var rpwTimesThat = MultiplyMatrixVector(Rpw, rRelTTimesTrel);
+
+            // t_cw_corrected = t_pw - (R_pw * R_rel^T * t_rel)
+            var tCorrected = new double[3];
+            for (int i = 0; i < 3; i++)
+                tCorrected[i] = tpw[i] - rpwTimesThat[i];
+
+            // Actual current pose
+            var rActual = current.Pose.Rotation;
+            var tActual = current.Pose.Translation;
+
+            // Delta rotation: R_delta = R_corrected * R_actual^T
+            var rActualT = Transpose(rActual);
+            var rDelta = MultiplyMatrices(rCorrected, rActualT);
+
+            // Delta translation: t_delta = t_corrected - R_delta * t_actual
+            var rDeltaTimesTactual = MultiplyMatrixVector(rDelta, tActual);
+            var tDelta = new double[3];
+            for (int i = 0; i < 3; i++)
+                tDelta[i] = tCorrected[i] - rDeltaTimesTactual[i];
+
+            // Find the index of the matched keyframe in the history.
+            int matchedIndex = -1;
+            var keyframeList = keyframes.GetAll();
+            for (int i = 0; i < keyframeList.Count; i++)
+            {
+                if (keyframeList[i].Id == matched.Id)
+                {
+                    matchedIndex = i;
+                    break;
+                }
+            }
+
+            if (matchedIndex < 0)
+                return;
+
+            // Apply correction to all keyframes after the matched one.
+            for (int i = matchedIndex + 1; i < keyframeList.Count; i++)
+            {
+                var kf = keyframeList[i];
+                var Rold = kf.Pose.Rotation;
+                var told = kf.Pose.Translation;
+
+                var Rnew = MultiplyMatrices(rDelta, Rold);
+                var rDeltaTimesTold = MultiplyMatrixVector(rDelta, told);
+                var tnew = new double[3];
+                for (int j = 0; j < 3; j++)
+                    tnew[j] = rDeltaTimesTold[j] + tDelta[j];
+
+                kf.Pose.Rotation = Rnew;
+                kf.Pose.Translation = tnew;
+            }
+
+            // Apply correction to all map points.
+            foreach (var point in map.Points)
+            {
+                var p = point.Position;
+                var rDeltaTimesP = MultiplyMatrixVector(rDelta, new double[] { p.X, p.Y, p.Z });
+                point.Position = new GLVector3(
+                    (float)(rDeltaTimesP[0] + tDelta[0]),
+                    (float)(rDeltaTimesP[1] + tDelta[1]),
+                    (float)(rDeltaTimesP[2] + tDelta[2]));
+            }
+
+            // Rebuild the spatial index since point positions changed.
+            spatialIndex.Rebuild(map.Points);
+
+            Log.Information(
+                "Loop closure: matched keyframe {MatchedId} with current {CurrentId}. " +
+                "Delta translation ({Dx:0.00}, {Dy:0.00}, {Dz:0.00}) m applied to {Keyframes} keyframes and {Points} points.",
+                matched.Id, current.Id,
+                tDelta[0], tDelta[1], tDelta[2],
+                keyframeList.Count - matchedIndex - 1,
+                map.Points.Count);
+        }
+
+        private static double[,] MultiplyMatrices(double[,] a, double[,] b)
+        {
+            var c = new double[3, 3];
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++)
+                {
+                    double sum = 0;
+                    for (int k = 0; k < 3; k++)
+                        sum += a[i, k] * b[k, j];
+                    c[i, j] = sum;
+                }
+            return c;
+        }
+
+        private static double[] MultiplyMatrixVector(double[,] m, double[] v)
+        {
+            var r = new double[3];
+            for (int i = 0; i < 3; i++)
+            {
+                double sum = 0;
+                for (int k = 0; k < 3; k++)
+                    sum += m[i, k] * v[k];
+                r[i] = sum;
+            }
+            return r;
+        }
+
+        private static double[,] Transpose(double[,] m)
+        {
+            var t = new double[3, 3];
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++)
+                    t[i, j] = m[j, i];
+            return t;
+        }
+
         public void Dispose()
         {
             gray.Dispose();
@@ -1383,6 +1560,7 @@ namespace HySlam.Core.Slam
             cameraMatrix?.Dispose();
             distortion?.Dispose();
             undistorted?.Dispose();
+            loopClosure?.Dispose();
         }
     }
 }
