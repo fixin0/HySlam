@@ -58,12 +58,17 @@ namespace HySlam.Core.Slam
         // instead of every frame to keep the UI responsive on long clips.
         private const int StructureUpdateInterval = 3;
 
+        // Local bundle adjustment window size: how many recent keyframes are included
+        // in each adjustment run.
+        private const int MaxWindowKeyframes = 8;
+
         private readonly MapData map;
         private readonly KeyframeManager keyframes;
         private readonly MotionPredictor motionPredictor = new();
         private readonly VoxelGrid spatialIndex = new();
         private readonly CameraPose currentPose = new();
         private readonly Mat gray = new();
+        private LocalBundleAdjuster bundleAdjuster = null!;
 
         private Mat cameraMatrix = null!;
         private Mat? distortion;
@@ -291,6 +296,14 @@ namespace HySlam.Core.Slam
 
             // Keep RANSAC inside OpenCV reproducible as well.
             Cv2.SetTheRNG(0x5EEDUL);
+
+            // Local bundle adjustment reduces drift over a sliding window of recent
+            // keyframes by refining poses and 3D point positions together.
+            bundleAdjuster = new LocalBundleAdjuster(
+                this,
+                (int)width,
+                (int)height,
+                fx, fy, cx, cy);
         }
 
         /// <summary>
@@ -466,6 +479,20 @@ namespace HySlam.Core.Slam
 
             if (trace)
                 Log.Information("ProcessFrame #{Call}: structure points added ({Added}).", callIndex, triangulatedCount);
+
+            // Run local bundle adjustment on the same cadence as structure
+            // triangulation. It refines keyframe poses and 3D point positions over
+            // a sliding window, reducing local drift.
+            if (processedFrames % StructureUpdateInterval == 0)
+            {
+                var recent = keyframes.Recent(MaxWindowKeyframes);
+                if (recent.Count >= 2)
+                {
+                    int refined = bundleAdjuster.Adjust(recent, map);
+                    if (trace && refined > 0)
+                        Log.Information("ProcessFrame #{Call}: bundle adjustment refined {Refined} keyframes.", callIndex, refined);
+                }
+            }
 
             TrimMapIfNeeded();
 
