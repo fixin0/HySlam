@@ -124,7 +124,10 @@ namespace HySlam.Core
                 capture.FrameHeight,
                 capture.Fps);
 
-            keyframes = new KeyframeManager();
+            // Loop closure needs a longer keyframe history to compare against
+            // distant places. Without it the default 8-keyframe window is enough.
+            keyframes = new KeyframeManager(
+                options.EnableLoopClosure ? 64 : KeyframeManager.DefaultHistoryLimit);
             slam = new SlamEngine(map, keyframes);
 
             double width = capture.FrameWidth;
@@ -148,6 +151,7 @@ namespace HySlam.Core
                 options.LkWindowSize,
                 options.LkLevels,
                 options.LkError);
+            slam.LoopClosureEnabled = options.EnableLoopClosure;
             recorder = new RunRecorder(options.DumpDirectory);
 
             double fps = capture.Fps;

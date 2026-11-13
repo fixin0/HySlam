@@ -164,6 +164,13 @@ namespace HySlam.Core.Slam
         public int ProcessedFrames => processedFrames;
 
         /// <summary>
+        /// Enables loop closure detection. Disabled by default because similar road
+        /// texture on a forward-driving clip can produce false positives that would
+        /// snap the trajectory incorrectly. Enable it for routes that revisit places.
+        /// </summary>
+        public bool LoopClosureEnabled { get; set; }
+
+        /// <summary>
         /// The undistorted frame used for tracking, or null when no distortion
         /// correction is active. The preview should use the same frame so overlays
         /// line up with the tracked points.
@@ -492,9 +499,17 @@ namespace HySlam.Core.Slam
                 var recent = keyframes.Recent(MaxWindowKeyframes);
                 if (recent.Count >= 2)
                 {
-                    int refined = bundleAdjuster.Adjust(recent, map);
-                    if (trace && refined > 0)
-                        Log.Information("ProcessFrame #{Call}: bundle adjustment refined {Refined} keyframes.", callIndex, refined);
+                    try
+                    {
+                        int refined = bundleAdjuster.Adjust(recent, map);
+                        if (trace && refined > 0)
+                            Log.Information("ProcessFrame #{Call}: bundle adjustment refined {Refined} keyframes.", callIndex, refined);
+                    }
+                    catch (Exception exception)
+                    {
+                        // A failed adjustment must never stop the viewer.
+                        Log.Warning(exception, "Local bundle adjustment failed; continuing without refinement.");
+                    }
                 }
             }
 
@@ -520,19 +535,30 @@ namespace HySlam.Core.Slam
             // Check for loop closure when a new keyframe was created. If a previous
             // keyframe is recognized, apply a global drift correction to the
             // trajectory and map points after the matched keyframe.
-            if (newKeyframe && !loopClosureCorrected)
+            if (newKeyframe && LoopClosureEnabled && !loopClosureCorrected)
             {
                 var currentKf = keyframes.Current;
                 if (currentKf is not null)
                 {
-                    var matched = loopClosure.Detect(currentKf);
-                    if (matched is not null)
+                    try
                     {
-                        // Compute the relative camera-to-camera transform from the
-                        // two stored poses: X_current = R_rel * X_matched + t_rel.
-                        var (rRel, tRel) = ComputeRelativePose(matched.Pose, currentKf.Pose);
-                        ApplyLoopClosureCorrection(matched, currentKf, rRel, tRel);
-                        loopClosureCorrected = true;
+                        var matched = loopClosure.Detect(currentKf);
+                        if (matched is not null)
+                        {
+                            // The camera has returned to a previously visited place, so the
+                            // relative translation is treated as zero: the current position
+                            // is snapped to the matched keyframe position while keeping the
+                            // measured orientation. This removes accumulated translational
+                            // drift without a full pose graph optimizer.
+                            var (rRel, _) = ComputeRelativePose(matched.Pose, currentKf.Pose);
+                            ApplyLoopClosureCorrection(matched, currentKf, rRel, new double[3]);
+                            loopClosureCorrected = true;
+                        }
+                    }
+                    catch (Exception exception)
+                    {
+                        // Loop closure is an optional improvement; never stop the viewer.
+                        Log.Warning(exception, "Loop closure detection failed; continuing without correction.");
                     }
                 }
             }
@@ -1056,19 +1082,20 @@ namespace HySlam.Core.Slam
                     continue;
                 }
 
+                var position = new GLVector3(glx, gly, glz);
+                var color = SampleColor(colorFrame, current[i]);
+                // Road points lie on the ground plane; their normal points up in
+                // world coordinates. GL y points down, so use (0, -1, 0).
+                var normal = new GLVector3(0f, -1f, 0f);
+
                 AddMapPoint(new MapPoint
                 {
-                    Position = new GLVector3(glx, gly, glz),
-                    Color = SampleColor(colorFrame, current[i]),
+                    Position = position,
+                    Color = color,
                     Observations = 1,
-                    // Road points lie on the ground plane; their normal points up
-                    // in world coordinates. GL y points down, so use (0, -1, 0).
-                    Normal = new GLVector3(0f, -1f, 0f),
+                    Normal = normal,
                     Confidence = 0.5f,
-                    SemanticLabel = SemanticClassifier.Classify(
-                        new GLVector3(glx, gly, glz),
-                        SampleColor(colorFrame, current[i]),
-                        new GLVector3(0f, -1f, 0f)),
+                    SemanticLabel = SemanticClassifier.Classify(position, color, normal),
                 });
 
                 added++;
@@ -1210,25 +1237,30 @@ namespace HySlam.Core.Slam
                         continue;
                     }
 
+                    // Approximate surface normal from the viewing direction. The
+                    // triangulated point is in keyframe camera coordinates, so rotate
+                    // the normal into world coordinates before storing/classifying it.
+                    double nxCam = -x / n1;
+                    double nyCam = -y / n1;
+                    double nzCam = -z / n1;
+                    var kfR = keyframe.Pose.Rotation;
+                    double nwx = kfR[0, 0] * nxCam + kfR[0, 1] * nyCam + kfR[0, 2] * nzCam;
+                    double nwy = kfR[1, 0] * nxCam + kfR[1, 1] * nyCam + kfR[1, 2] * nzCam;
+                    double nwz = kfR[2, 0] * nxCam + kfR[2, 1] * nyCam + kfR[2, 2] * nzCam;
+                    // World y points down; GL y points up.
+                    var normal = new GLVector3((float)nwx, (float)-nwy, (float)-nwz);
+
+                    var position = new GLVector3(glx, gly, glz);
+                    var color = SampleColor(colorFrame, to[i]);
+
                     AddMapPoint(new MapPoint
                     {
-                        Position = new GLVector3(glx, gly, glz),
-                        Color = SampleColor(colorFrame, to[i]),
+                        Position = position,
+                        Color = color,
                         Observations = 1,
-                        // Approximate surface normal from the viewing direction:
-                        // points seen from the camera tend to face the camera.
-                        Normal = new GLVector3(
-                            (float)(-x / n1),
-                            (float)(-y / n1),
-                            (float)(-z / n1)),
+                        Normal = normal,
                         Confidence = 0.5f,
-                        SemanticLabel = SemanticClassifier.Classify(
-                            new GLVector3(glx, gly, glz),
-                            SampleColor(colorFrame, to[i]),
-                            new GLVector3(
-                                (float)(-x / n1),
-                                (float)(-y / n1),
-                                (float)(-z / n1))),
+                        SemanticLabel = SemanticClassifier.Classify(position, color, normal),
                     });
 
                     added++;

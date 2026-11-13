@@ -13,6 +13,7 @@ Options:
   --verify:<directory> Validate a bake output directory and exit (0 ok, 1 problems)
   --max-frames:<N>     Stop after reading N source frames (positive integer)
   --deterministic      Read one source frame per update instead of wall-clock pacing
+  --loop-closure       Enable loop closure detection and drift correction (opt-in)
   --camera-height:<m>  Camera height above the road in meters. Default: 1.3
   --pitch:<deg>        Camera pitch override in degrees (positive looks down).
                        Default: derived from the road horizon (0.665 * frame height)
@@ -62,6 +63,11 @@ Scene presets (explicit options always override preset values):
   on high-speed and low-texture footage. Structure points are triangulated from
   the last three keyframes (multi-keyframe), giving a denser map on complex
   city roads.
+
+  Loop closure detection is opt-in (--loop-closure). When enabled, a keyframe
+  whose ORB descriptors match an older keyframe snaps the trajectory back to that
+  place. It helps routes that revisit locations but can misfire on forward-driving
+  clips with repetitive road texture, so it is disabled by default.
 
 Bake mode (--bake):
   Processes the whole video offline without opening the OpenGL window. The

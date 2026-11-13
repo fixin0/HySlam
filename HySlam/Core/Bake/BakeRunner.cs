@@ -214,6 +214,7 @@ namespace HySlam.Core.Bake
                     settings.StructureKeyframes,
                     settings.StructurePoints);
 
+                slam.LoopClosureEnabled = options.EnableLoopClosure;
                 slam.ApplyPosePrior(prior);
 
                 int frameIndex = FrameSkip - 1;

@@ -115,6 +115,13 @@ namespace HySlam.Core
         public double LkError { get; init; } = 20.0;
 
         /// <summary>
+        /// Enables loop closure detection and drift correction. Disabled by default:
+        /// a forward-driving clip with repeated road texture can produce false
+        /// positives. Enable it when the route revisits previously seen places.
+        /// </summary>
+        public bool EnableLoopClosure { get; init; }
+
+        /// <summary>
         /// Offline bake configuration. When set the program runs headless, processes
         /// the clip several times and writes the best result to the bake directory
         /// instead of opening the interactive window.

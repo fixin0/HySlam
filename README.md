@@ -234,6 +234,7 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | `--verify` | directory | none | existing bake output | Validates the five bake files headlessly and exits with code `0` or `1`. Mutually exclusive with `--load` and `--bake` |
 | `--max-frames` | integer | `0` (unlimited) | `>= 1` | Stop after `N` decoded source frames. Only every third frame is processed, so `--max-frames 120` feeds about 40 frames to the pipeline |
 | `--deterministic` | flag | off | no value | Read one source frame per update instead of wall-clock pacing; also seeds OpenCV RNG |
+| `--loop-closure` | flag | off | no value | Enable loop closure detection and drift correction. Opt-in because repetitive road texture on a forward-driving clip can produce false positives |
 | `--camera-height` | meters | `1.3` | `> 0` | Camera height above the road. Sets the metric scale of the whole trajectory |
 | `--pitch` | degrees | horizon-derived | `-45 .. 45` | Camera tilt; positive looks down. Indoor presets default to `5` when the option is omitted |
 | `--fov` | degrees | fallback `fx = fy = 1.1 * width` | `> 0` and `< 180` | Horizontal FOV for the fallback intrinsics. Omit it to keep the width-based fallback; a value of `0` is rejected |
@@ -639,11 +640,12 @@ reduces local drift without a full sparse linear solver.
 
 ### Loop closure and drift correction
 
-When the current keyframe's ORB descriptors match an older keyframe (BruteForce
-Hamming matching + Lowe's ratio test), a loop closure is declared. The relative
-transform between the two keyframes is used to compute a global rotation /
-translation delta, which is applied to all subsequent keyframes and map points,
-pulling the drifted trajectory back into alignment.
+Loop closure detection is **opt-in** with `--loop-closure`. When the current
+keyframe's ORB descriptors match an older keyframe (BruteForce Hamming matching +
+Lowe's ratio test), the trajectory is snapped back to the matched keyframe
+position. This helps routes that revisit previously seen places, but repetitive
+road texture on a forward-driving dashcam can produce false positives that would
+distort the map, so it is disabled by default.
 
 ### Rendering options
 

@@ -203,6 +203,7 @@ namespace HySlam
             int? lkLevels = null;
             double? lkError = null;
             string scenePreset = "road";
+            bool loopClosure = false;
             bool bake = false;
             bool bakeOptionUsed = false;
             int bakePasses = 5;
@@ -288,6 +289,16 @@ namespace HySlam
                             }
 
                             deterministic = true;
+                            break;
+
+                        case "--loop-closure":
+                            if (!string.IsNullOrEmpty(inlineValue))
+                            {
+                                Log.Error("Error: '--loop-closure' does not take a value.");
+                                return ParseResult.Error;
+                            }
+
+                            loopClosure = true;
                             break;
 
                         case "--camera-height":
@@ -651,6 +662,7 @@ namespace HySlam
                 DumpDirectory = bakeOptions is null ? dumpDirectory : null,
                 MaxFrames = maxFrames,
                 Deterministic = deterministic,
+                EnableLoopClosure = loopClosure,
                 CameraHeight = cameraHeight,
                 PitchDegrees = pitchDegrees,
                 HorizontalFovDegrees = horizontalFovDegrees,

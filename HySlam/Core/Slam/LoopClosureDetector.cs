@@ -15,9 +15,18 @@ namespace HySlam.Core.Slam
     internal sealed class LoopClosureDetector
     {
         private const int MaxHistoryKeyframes = 64;
-        private const int MinMatchCount = 20;
-        private const double MinInlierRatio = 0.30;
-        private const double MinLoopBaselineMeters = 3.0;
+        private const int MinMatchCount = 30;
+        private const double MinInlierRatio = 0.45;
+        private const double MinLoopBaselineMeters = 5.0;
+        private const int MinKeyframeGap = 10;
+
+        // A real loop travels a long path but returns close to the start. A straight
+        // road has arc length roughly equal to the straight-line distance, so the
+        // ratio check rejects most false positives. A large heading change also
+        // indicates that the camera turned around rather than drove straight on.
+        private const double MinLoopPathMeters = 20.0;
+        private const double MinLoopPathRatio = 1.8;
+        private const double MinLoopHeadingDegrees = 30.0;
 
         private readonly DescriptorMatcher matcher;
         private readonly List<Keyframe> history = new();
@@ -33,21 +42,27 @@ namespace HySlam.Core.Slam
         /// </summary>
         public Keyframe? Detect(Keyframe current)
         {
-            if (current.Descriptors is null || current.Descriptors.Rows < MinMatchCount)
+            if (current.Descriptors is null || current.Descriptors.IsDisposed ||
+                current.Descriptors.Rows < MinMatchCount)
                 return null;
 
             foreach (var past in history)
             {
-                if (past.Descriptors is null || past.Descriptors.Rows < MinMatchCount)
+                if (past.Descriptors is null || past.Descriptors.IsDisposed ||
+                    past.Descriptors.Rows < MinMatchCount)
                     continue;
 
                 // Skip very recent keyframes (they are part of the local window).
-                if (current.Id - past.Id < 5)
+                if (current.Id - past.Id < MinKeyframeGap)
                     continue;
 
                 // Skip if the two keyframes are too close in space (not a real loop).
                 var d = current.Pose.GetCameraPositionGL() - past.Pose.GetCameraPositionGL();
                 if (d.Length < MinLoopBaselineMeters)
+                    continue;
+
+                // Geometric gate: a loop travels a long path and/or turns around.
+                if (!LooksLikeLoop(past, current))
                     continue;
 
                 if (HasEnoughMatches(current, past))
@@ -60,32 +75,66 @@ namespace HySlam.Core.Slam
             return null;
         }
 
-        private bool HasEnoughMatches(Keyframe current, Keyframe past)
+        private bool LooksLikeLoop(Keyframe past, Keyframe current)
         {
-            using var matches = new Mat();
-            matcher.Match(current.Descriptors!, past.Descriptors!, matches);
-
-            DMatch[] matchArray;
-            matches.GetArray<DMatch>(out matchArray);
-
-            if (matchArray.Length < MinMatchCount)
+            int start = history.IndexOf(past);
+            if (start < 0)
                 return false;
 
-            // Sort by distance and keep the best matches.
-            System.Array.Sort(matchArray, (a, b) => a.Distance.CompareTo(b.Distance));
-            int keep = System.Math.Min(matchArray.Length, 100);
+            // Arc length along the keyframe history from the matched keyframe to the
+            // current one.
+            double arc = 0.0;
+            var prev = history[start].Pose.GetCameraPositionGL();
+            for (int i = start + 1; i < history.Count; i++)
+            {
+                var p = history[i].Pose.GetCameraPositionGL();
+                arc += (p - prev).Length;
+                prev = p;
+            }
+
+            var currentPos = current.Pose.GetCameraPositionGL();
+            arc += (currentPos - prev).Length;
+
+            double straight = (currentPos - history[start].Pose.GetCameraPositionGL()).Length;
+            if (straight < 1e-3)
+                return false;
+            if (arc < MinLoopPathMeters)
+                return false;
+
+            // A true loop either travels much farther than the straight-line distance
+            // or turns the camera by a significant angle.
+            double ratio = arc / straight;
+            double headingDiff = HeadingDifferenceDegrees(past, current);
+            return ratio >= MinLoopPathRatio || headingDiff >= MinLoopHeadingDegrees;
+        }
+
+        private static double HeadingDifferenceDegrees(Keyframe a, Keyframe b)
+        {
+            double diff = Math.Abs(b.Pose.ExtractYawRadians() - a.Pose.ExtractYawRadians());
+            while (diff > Math.PI)
+                diff = Math.Abs(diff - 2.0 * Math.PI);
+            return diff * 180.0 / Math.PI;
+        }
+
+        private bool HasEnoughMatches(Keyframe current, Keyframe past)
+        {
+            // KnnMatch returns one array per query descriptor with the two best
+            // candidates, which lets us apply a proper Lowe's ratio test.
+            DMatch[][] matches = matcher.KnnMatch(current.Descriptors!, past.Descriptors!, 2);
+
+            if (matches.Length < MinMatchCount)
+                return false;
+
+            const double ratioThreshold = 0.75;
             int goodCount = 0;
 
-            // Lowe's ratio test: a match is good if its distance is much smaller
-            // than the second-best match's distance.
-            const double ratioThreshold = 0.8;
-            for (int i = 0; i < keep; i++)
+            foreach (var pair in matches)
             {
-                if (i + 1 < matchArray.Length &&
-                    matchArray[i].Distance <= ratioThreshold * matchArray[i + 1].Distance)
-                {
+                if (pair.Length < 2)
+                    continue;
+
+                if (pair[0].Distance <= ratioThreshold * pair[1].Distance)
                     goodCount++;
-                }
             }
 
             return goodCount >= MinMatchCount * MinInlierRatio;
