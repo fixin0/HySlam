@@ -1065,6 +1065,10 @@ namespace HySlam.Core.Slam
                     // in world coordinates. GL y points down, so use (0, -1, 0).
                     Normal = new GLVector3(0f, -1f, 0f),
                     Confidence = 0.5f,
+                    SemanticLabel = SemanticClassifier.Classify(
+                        new GLVector3(glx, gly, glz),
+                        SampleColor(colorFrame, current[i]),
+                        new GLVector3(0f, -1f, 0f)),
                 });
 
                 added++;
@@ -1218,6 +1222,13 @@ namespace HySlam.Core.Slam
                             (float)(-y / n1),
                             (float)(-z / n1)),
                         Confidence = 0.5f,
+                        SemanticLabel = SemanticClassifier.Classify(
+                            new GLVector3(glx, gly, glz),
+                            SampleColor(colorFrame, to[i]),
+                            new GLVector3(
+                                (float)(-x / n1),
+                                (float)(-y / n1),
+                                (float)(-z / n1))),
                     });
 
                     added++;
