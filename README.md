@@ -90,6 +90,9 @@ HySlam/
 │   │   ├── SlamEngine.cs           // OpenCV pipeline (optical flow, pose, triangulation)
 │   │   ├── MotionPredictor.cs      // Constant-velocity forecast and outlier gate
 │   │   ├── PosePriorStep.cs        // Previous-pass motion prior for one frame
+│   │   ├── LocalBundleAdjuster.cs  // Sliding-window pose and point refinement
+│   │   ├── LoopClosureDetector.cs  // ORB descriptor place recognition
+│   │   ├── SemanticClassifier.cs   // Rule-based point labels (ground/building/...)
 │   │   ├── CameraCalibration.cs    // Intrinsics/distortion loading and scaling
 │   │   ├── CameraPose.cs           // Camera rotation + translation
 │   │   └── KeyframeManager.cs      // Bounded keyframe history
@@ -101,12 +104,12 @@ HySlam/
 │   │   └── LogControl.cs           // Runtime Serilog level switch used by the bake bar
 │   │
 │   ├── Data/
-│   │   ├── MapPoint.cs             // A single 3D map point
+│   │   ├── MapPoint.cs             // 3D point: position, colour, normal, confidence, label
 │   │   ├── MapData.cs              // Map collections (points + trajectory)
 │   │   └── VoxelGrid.cs            // Spatial hash that prevents duplicate points
 │   │
 │   └── Rendering/
-│       ├── MapRenderer.cs          // Single free-camera OpenGL view (VAO/VBO, draw calls)
+│       ├── MapRenderer.cs          // Free-camera view with semantic filter and frustum culling
 │       ├── Shader.cs               // Shader compilation/linking and uniform handling
 │       └── Shaders.glsl            // Vertex + fragment shader (#vertex / #fragment)
 │
@@ -610,6 +613,48 @@ is normally reported as a warning.
 
 `--verify` is specific to a bake output because it expects `passes.csv`. Use
 `--load` to inspect a plain `--dump` run.
+
+## Environment mapping
+
+HySlam can be extended beyond sparse road mapping towards a richer environment
+model. The following capabilities have been added:
+
+### Semantic point labels
+
+Every map point now carries an optional `semantic_label` (`ground`,
+`vegetation`, `building`, `sky`, `unknown`), a surface `normal`, and a
+`confidence` score in [0, 1]. These are written to `points.csv` as the last
+three columns (`normal_x,normal_y,normal_z,confidence,semantic_label`) and read
+back by `--load` and `--verify`.
+
+Labels are assigned by simple rules based on colour, normal direction and
+height above ground — no trained neural network is required.
+
+### Local bundle adjustment
+
+Every `StructureUpdateInterval` frames, a sliding window of recent keyframes is
+optimised: keyframe poses are refined with `solvePnP` against observed 3D
+points, and 3D points are re-triangulated from the best baseline pairs. This
+reduces local drift without a full sparse linear solver.
+
+### Loop closure and drift correction
+
+When the current keyframe's ORB descriptors match an older keyframe (BruteForce
+Hamming matching + Lowe's ratio test), a loop closure is declared. The relative
+transform between the two keyframes is used to compute a global rotation /
+translation delta, which is applied to all subsequent keyframes and map points,
+pulling the drifted trajectory back into alignment.
+
+### Rendering options
+
+`MapRenderer.Options` supports:
+- `SemanticFilter` — render only points with specific labels
+- `MinConfidence` — skip points below a confidence threshold
+- `ColorBySemantic` — colour by label instead of sampled colour
+- `EnableFrustumCulling` — skip points outside the camera frustum
+
+Semantic colours: ground = green, vegetation = bright green, building = gray,
+sky = blue, unknown = white.
 
 ## Calibration
 
