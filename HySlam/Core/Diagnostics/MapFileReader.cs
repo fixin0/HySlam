@@ -90,9 +90,16 @@ namespace HySlam.Core.Diagnostics
             int g = OptionalColumn(header, "g");
             int b = OptionalColumn(header, "b");
             int observations = OptionalColumn(header, "observations");
+            int normalX = OptionalColumn(header, "normal_x");
+            int normalY = OptionalColumn(header, "normal_y");
+            int normalZ = OptionalColumn(header, "normal_z");
+            int confidence = OptionalColumn(header, "confidence");
+            int semanticLabel = OptionalColumn(header, "semantic_label");
 
             bool hasColor = r >= 0 && g >= 0 && b >= 0;
             bool hasObservations = observations >= 0;
+            bool hasNormal = normalX >= 0 && normalY >= 0 && normalZ >= 0;
+            bool hasConfidence = confidence >= 0;
 
             int lineNumber = 1;
             string? line;
@@ -115,6 +122,21 @@ namespace HySlam.Core.Diagnostics
                         ParseFloat(cells, b, path, lineNumber, "b"))
                     : new GLVector3(1f, 1f, 1f);
 
+                var normal = hasNormal
+                    ? new GLVector3(
+                        ParseFloat(cells, normalX, path, lineNumber, "normal_x"),
+                        ParseFloat(cells, normalY, path, lineNumber, "normal_y"),
+                        ParseFloat(cells, normalZ, path, lineNumber, "normal_z"))
+                    : GLVector3.Zero;
+
+                float conf = hasConfidence
+                    ? ParseConfidence(cells, confidence, path, lineNumber)
+                    : 0.0f;
+
+                string label = semanticLabel >= 0 && semanticLabel < cells.Length
+                    ? cells[semanticLabel].Trim()
+                    : string.Empty;
+
                 int count = hasObservations
                     ? ParseObservationCount(cells, observations, path, lineNumber)
                     : 1;
@@ -123,7 +145,10 @@ namespace HySlam.Core.Diagnostics
                 {
                     Position = position,
                     Color = color,
-                    Observations = count
+                    Observations = count,
+                    Normal = normal,
+                    Confidence = conf,
+                    SemanticLabel = label,
                 });
             }
 
@@ -245,6 +270,29 @@ namespace HySlam.Core.Diagnostics
             {
                 throw new InvalidDataException(
                     $"{Path.GetFileName(path)} line {lineNumber}: 'observations' is not a non-negative integer ('{text}').");
+            }
+
+            return value;
+        }
+
+        private static float ParseConfidence(
+            string[] cells,
+            int index,
+            string path,
+            int lineNumber)
+        {
+            if (index >= cells.Length)
+            {
+                throw new InvalidDataException(
+                    $"{Path.GetFileName(path)} line {lineNumber} is missing the 'confidence' value.");
+            }
+
+            string text = cells[index].Trim();
+            if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float value) ||
+                !float.IsFinite(value) || value < 0.0f || value > 1.0f)
+            {
+                throw new InvalidDataException(
+                    $"{Path.GetFileName(path)} line {lineNumber}: 'confidence' must be in [0, 1] ('{text}').");
             }
 
             return value;

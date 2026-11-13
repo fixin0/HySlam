@@ -983,7 +983,11 @@ namespace HySlam.Core.Slam
                 {
                     Position = new GLVector3(glx, gly, glz),
                     Color = SampleColor(colorFrame, current[i]),
-                    Observations = 1
+                    Observations = 1,
+                    // Road points lie on the ground plane; their normal points up
+                    // in world coordinates. GL y points down, so use (0, -1, 0).
+                    Normal = new GLVector3(0f, -1f, 0f),
+                    Confidence = 0.5f,
                 });
 
                 added++;
@@ -1129,7 +1133,14 @@ namespace HySlam.Core.Slam
                     {
                         Position = new GLVector3(glx, gly, glz),
                         Color = SampleColor(colorFrame, to[i]),
-                        Observations = 1
+                        Observations = 1,
+                        // Approximate surface normal from the viewing direction:
+                        // points seen from the camera tend to face the camera.
+                        Normal = new GLVector3(
+                            (float)(-x / n1),
+                            (float)(-y / n1),
+                            (float)(-z / n1)),
+                        Confidence = 0.5f,
                     });
 
                     added++;

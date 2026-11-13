@@ -458,18 +458,24 @@ namespace HySlam.Core.Bake
         private void WritePoints(BakePassResult selected)
         {
             using var writer = NewWriter("points.csv");
-            writer.WriteLine("x,y,z,r,g,b");
+            writer.WriteLine("x,y,z,r,g,b,normal_x,normal_y,normal_z,confidence,semantic_label");
 
             foreach (var point in selected.Map.Points)
             {
                 var position = point.Position;
+                var normal = point.Normal;
                 writer.WriteLine(string.Join(',',
                     F(position.X),
                     F(position.Y),
                     F(position.Z),
                     F(point.Color.X),
                     F(point.Color.Y),
-                    F(point.Color.Z)));
+                    F(point.Color.Z),
+                    F(normal.X),
+                    F(normal.Y),
+                    F(normal.Z),
+                    F(point.Confidence),
+                    CsvEscape(point.SemanticLabel)));
             }
         }
 
@@ -581,5 +587,14 @@ namespace HySlam.Core.Bake
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         private static string F(double value) => value.ToString("F4", CultureInfo.InvariantCulture);
+
+        private static string CsvEscape(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+            if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+                return $"\"{value.Replace("\"", "\"\"")}\"";
+            return value;
+        }
     }
 }
