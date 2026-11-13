@@ -20,17 +20,21 @@ namespace HySlam.Core
     {
         private readonly string directory;
         private readonly MapData map;
+        private readonly RenderColorMode colorMode;
+        private readonly bool showGrid;
 
         private MapRenderer renderer = null!;
         private int renderFrames;
 
-        public LoadedMapWindow(string directory, MapData map)
+        public LoadedMapWindow(string directory, MapData map, RenderColorMode colorMode, bool showGrid)
             : base(
                 CreateGameWindowSettings(),
                 CreateNativeWindowSettings(directory))
         {
             this.directory = directory;
             this.map = map;
+            this.colorMode = colorMode;
+            this.showGrid = showGrid;
         }
 
         private static GameWindowSettings CreateGameWindowSettings()
@@ -76,6 +80,8 @@ namespace HySlam.Core
                     GL.GetString(StringName.Vendor) ?? "unknown");
 
                 renderer = new MapRenderer();
+                renderer.Options.ColorMode = colorMode;
+                renderer.Options.ShowGrid = showGrid;
                 renderer.FrameMap(map);
 
                 double pathMeters = 0.0;

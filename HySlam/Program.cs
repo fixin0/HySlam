@@ -3,6 +3,7 @@ using HySlam.Core;
 using HySlam.Core.Bake;
 using HySlam.Core.Data;
 using HySlam.Core.Diagnostics;
+using HySlam.Core.Rendering;
 using HySlam.Core.Slam;
 using Serilog;
 using Serilog.Events;
@@ -137,7 +138,8 @@ namespace HySlam
                         map.Trajectory.Count,
                         options.LoadDirectory);
 
-                    using var mapWindow = new LoadedMapWindow(options.LoadDirectory, map);
+                    using var mapWindow = new LoadedMapWindow(
+                        options.LoadDirectory, map, options.ColorMode, options.ShowGrid);
                     Log.Information("Entering the map viewer.");
                     mapWindow.Run();
                     Log.Information("Map viewer closed normally.");
@@ -204,6 +206,8 @@ namespace HySlam
             double? lkError = null;
             string scenePreset = "road";
             bool loopClosure = false;
+            RenderColorMode colorMode = RenderColorMode.Height;
+            bool showGrid = false;
             bool bake = false;
             bool bakeOptionUsed = false;
             int bakePasses = 5;
@@ -299,6 +303,25 @@ namespace HySlam
                             }
 
                             loopClosure = true;
+                            break;
+
+                        case "--color-mode":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? colorModeValue))
+                                return ParseResult.Error;
+
+                            if (!TryParseColorMode(colorModeValue, out colorMode))
+                                return ParseResult.Error;
+
+                            break;
+
+                        case "--grid":
+                            if (!string.IsNullOrEmpty(inlineValue))
+                            {
+                                Log.Error("Error: '--grid' does not take a value.");
+                                return ParseResult.Error;
+                            }
+
+                            showGrid = true;
                             break;
 
                         case "--camera-height":
@@ -533,7 +556,9 @@ namespace HySlam
                 {
                     VideoPath = null,
                     LoadDirectory = loadDirectory,
-                    VerifyDirectory = verifyDirectory
+                    VerifyDirectory = verifyDirectory,
+                    ColorMode = colorMode,
+                    ShowGrid = showGrid
                 };
 
                 return ParseResult.Run;
@@ -663,6 +688,8 @@ namespace HySlam
                 MaxFrames = maxFrames,
                 Deterministic = deterministic,
                 EnableLoopClosure = loopClosure,
+                ColorMode = colorMode,
+                ShowGrid = showGrid,
                 CameraHeight = cameraHeight,
                 PitchDegrees = pitchDegrees,
                 HorizontalFovDegrees = horizontalFovDegrees,
@@ -776,6 +803,31 @@ namespace HySlam
             }
 
             return true;
+        }
+
+        private static bool TryParseColorMode(string text, out RenderColorMode value)
+        {
+            switch (text.Trim().ToLowerInvariant())
+            {
+                case "sampled":
+                    value = RenderColorMode.Sampled;
+                    return true;
+                case "semantic":
+                    value = RenderColorMode.Semantic;
+                    return true;
+                case "height":
+                    value = RenderColorMode.Height;
+                    return true;
+                case "confidence":
+                    value = RenderColorMode.Confidence;
+                    return true;
+                default:
+                    Log.Error(
+                        "Error: '--color-mode' must be sampled, semantic, height or confidence, got '{Value}'.",
+                        text);
+                    value = RenderColorMode.Height;
+                    return false;
+            }
         }
 
         /// <summary>

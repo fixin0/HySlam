@@ -1,4 +1,5 @@
 using HySlam.Core.Bake;
+using HySlam.Core.Rendering;
 using HySlam.Core.Slam;
 
 namespace HySlam.Core
@@ -120,6 +121,15 @@ namespace HySlam.Core
         /// positives. Enable it when the route revisits previously seen places.
         /// </summary>
         public bool EnableLoopClosure { get; init; }
+
+        /// <summary>
+        /// Point colour mode for the viewer. Defaults to the LiDAR-style height
+        /// palette; use Sampled to keep the colours from the source video.
+        /// </summary>
+        public RenderColorMode ColorMode { get; init; } = RenderColorMode.Height;
+
+        /// <summary>Draw the ground grid and height axis in the viewer.</summary>
+        public bool ShowGrid { get; init; }
 
         /// <summary>
         /// Offline bake configuration. When set the program runs headless, processes

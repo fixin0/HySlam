@@ -235,6 +235,8 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | `--max-frames` | integer | `0` (unlimited) | `>= 1` | Stop after `N` decoded source frames. Only every third frame is processed, so `--max-frames 120` feeds about 40 frames to the pipeline |
 | `--deterministic` | flag | off | no value | Read one source frame per update instead of wall-clock pacing; also seeds OpenCV RNG |
 | `--loop-closure` | flag | off | no value | Enable loop closure detection and drift correction. Opt-in because repetitive road texture on a forward-driving clip can produce false positives |
+| `--color-mode` | name | `height` | `height`, `sampled`, `semantic`, `confidence` | Point colour palette. `height` is the LiDAR-style Turbo ramp; `sampled` keeps the video colours |
+| `--grid` | flag | off | no value | Show the ground grid and height axis. Hidden by default for a clean point-cloud view |
 | `--camera-height` | meters | `1.3` | `> 0` | Camera height above the road. Sets the metric scale of the whole trajectory |
 | `--pitch` | degrees | horizon-derived | `-45 .. 45` | Camera tilt; positive looks down. Indoor presets default to `5` when the option is omitted |
 | `--fov` | degrees | fallback `fx = fy = 1.1 * width` | `> 0` and `< 180` | Horizontal FOV for the fallback intrinsics. Omit it to keep the width-based fallback; a value of `0` is rejected |
@@ -649,14 +651,26 @@ distort the map, so it is disabled by default.
 
 ### Rendering options
 
-`MapRenderer.Options` supports:
+The viewer defaults to a **LiDAR-style height palette**: a Turbo ramp from blue
+at low points through cyan, green and yellow to red at high points, on a pure
+black background. The ground grid and height axis are hidden by default so the
+point cloud reads like a LiDAR scan; add `--grid` to show them.
+
+`--color-mode` selects the palette:
+
+| Mode | Colours |
+| --- | --- |
+| `height` (default) | Turbo ramp by point height |
+| `sampled` | Original colour sampled from the video |
+| `semantic` | Label colours: ground = green, vegetation = bright green, building = gray, sky = blue, unknown = white |
+| `confidence` | Turbo ramp by point confidence |
+
+`MapRenderer.Options` also supports:
 - `SemanticFilter` — render only points with specific labels
 - `MinConfidence` — skip points below a confidence threshold
-- `ColorBySemantic` — colour by label instead of sampled colour
+- `ShowGrid` — draw the ground grid and height axis
+- `ShowTrajectory` — draw the trajectory points
 - `EnableFrustumCulling` — skip points outside the camera frustum
-
-Semantic colours: ground = green, vegetation = bright green, building = gray,
-sky = blue, unknown = white.
 
 ## Calibration
 

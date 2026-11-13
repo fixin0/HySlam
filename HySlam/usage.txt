@@ -14,6 +14,8 @@ Options:
   --max-frames:<N>     Stop after reading N source frames (positive integer)
   --deterministic      Read one source frame per update instead of wall-clock pacing
   --loop-closure       Enable loop closure detection and drift correction (opt-in)
+  --color-mode:<mode>  Point colour: height, sampled, semantic, confidence. Default: height
+  --grid               Show the ground grid and height axis (hidden by default)
   --camera-height:<m>  Camera height above the road in meters. Default: 1.3
   --pitch:<deg>        Camera pitch override in degrees (positive looks down).
                        Default: derived from the road horizon (0.665 * frame height)
@@ -68,6 +70,12 @@ Scene presets (explicit options always override preset values):
   whose ORB descriptors match an older keyframe snaps the trajectory back to that
   place. It helps routes that revisit locations but can misfire on forward-driving
   clips with repetitive road texture, so it is disabled by default.
+
+  The viewer colours points with a LiDAR-style height palette by default
+  (blue at low points through green and yellow to red at high points). Use
+  --color-mode:sampled for the original video colours, --color-mode:semantic for
+  class colours, or --color-mode:confidence for the confidence palette. The
+  ground grid and height axis are hidden by default; add --grid to show them.
 
 Bake mode (--bake):
   Processes the whole video offline without opening the OpenGL window. The

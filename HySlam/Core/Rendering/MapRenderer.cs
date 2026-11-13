@@ -6,6 +6,22 @@ using GLVector3 = OpenTK.Mathematics.Vector3;
 
 namespace HySlam.Core.Rendering
 {
+    /// <summary>How map points are coloured.</summary>
+    public enum RenderColorMode
+    {
+        /// <summary>Use the colour sampled from the source video.</summary>
+        Sampled,
+
+        /// <summary>Colour by semantic label (ground, building, ...).</summary>
+        Semantic,
+
+        /// <summary>Colour by height using a Turbo/LiDAR-style palette.</summary>
+        Height,
+
+        /// <summary>Colour by point confidence using the same palette.</summary>
+        Confidence,
+    }
+
     /// <summary>
     /// Rendering options for the map viewer.
     /// </summary>
@@ -22,11 +38,14 @@ namespace HySlam.Core.Rendering
         /// </summary>
         public float MinConfidence { get; set; }
 
-        /// <summary>
-        /// When true, points are coloured by semantic label instead of their
-        /// sampled colour.
-        /// </summary>
-        public bool ColorBySemantic { get; set; }
+        /// <summary>Point colour mode. Defaults to the LiDAR-style height palette.</summary>
+        public RenderColorMode ColorMode { get; set; } = RenderColorMode.Height;
+
+        /// <summary>Draw the ground grid and height axis.</summary>
+        public bool ShowGrid { get; set; }
+
+        /// <summary>Draw the trajectory points.</summary>
+        public bool ShowTrajectory { get; set; } = true;
 
         /// <summary>
         /// When true, points outside the camera frustum are not uploaded.
@@ -140,9 +159,14 @@ namespace HySlam.Core.Rendering
             var lines = new List<float>();
             var points = new List<float>();
 
-            // Draw the ground grid, height axis and, for a live run, the camera frustum.
-            AddGroundGrid(lines);
-            AddHeightAxis(lines);
+            // Grid and height axis are optional so the view can match a clean
+            // LiDAR-style point cloud.
+            if (options.ShowGrid)
+            {
+                AddGroundGrid(lines);
+                AddHeightAxis(lines);
+            }
+
             if (pose is not null)
                 AddCameraFrustum(lines, pose);
 
@@ -160,6 +184,22 @@ namespace HySlam.Core.Rendering
                     MathHelper.DegreesToRadians(60f), fcAspect, 0.1f, 2000f);
                 var fcView = Matrix4.LookAt(fcEye, fcTarget, fcUp);
                 frustumMVP = fcView * fcProjection;
+            }
+
+            // Height range for the LiDAR-style height palette.
+            float minHeight = 0f, maxHeight = 1f;
+            if (options.ColorMode == RenderColorMode.Height && map.Points.Count > 0)
+            {
+                minHeight = float.MaxValue;
+                maxHeight = float.MinValue;
+                foreach (var p in map.Points)
+                {
+                    if (p.Position.Y < minHeight) minHeight = p.Position.Y;
+                    if (p.Position.Y > maxHeight) maxHeight = p.Position.Y;
+                }
+
+                if (maxHeight - minHeight < 1e-3f)
+                    maxHeight = minHeight + 1f;
             }
 
             // Point cloud with optional semantic filtering, confidence threshold
@@ -182,9 +222,7 @@ namespace HySlam.Core.Rendering
                 if (frustumMVP.HasValue && !IsPointInFrustum(p.Position, frustumMVP.Value))
                     continue;
 
-                var color = options.ColorBySemantic
-                    ? SemanticColor(p.SemanticLabel)
-                    : p.Color;
+                var color = ColorForPoint(p, minHeight, maxHeight);
 
                 AddVertex(points, p.Position.X, p.Position.Y, p.Position.Z,
                     color.X, color.Y, color.Z);
@@ -195,11 +233,15 @@ namespace HySlam.Core.Rendering
 
             // Trajectory (bright green points)
             int trajStart = pointStart + pointCount;
-            foreach (var c in map.Trajectory)
+            int trajCount = 0;
+            if (options.ShowTrajectory)
             {
-                AddVertex(points, c.X, c.Y, c.Z, 0.1f, 1.0f, 0.3f);
+                foreach (var c in map.Trajectory)
+                {
+                    AddVertex(points, c.X, c.Y, c.Z, 0.1f, 1.0f, 0.3f);
+                }
+                trajCount = map.Trajectory.Count;
             }
-            int trajCount = map.Trajectory.Count;
 
             // The point cloud is the expensive part of the upload; geometry lines are
             // small. Reallocate the buffer only when its total size changes, otherwise
@@ -290,6 +332,52 @@ namespace HySlam.Core.Rendering
             return x >= -w && x <= w &&
                    y >= -w && y <= w &&
                    z >= -w && z <= w;
+        }
+
+        private GLVector3 ColorForPoint(MapPoint point, float minHeight, float maxHeight)
+        {
+            switch (options.ColorMode)
+            {
+                case RenderColorMode.Semantic:
+                    return SemanticColor(point.SemanticLabel);
+
+                case RenderColorMode.Height:
+                {
+                    float t = (point.Position.Y - minHeight) / (maxHeight - minHeight);
+                    return Turbo(Math.Clamp(t, 0f, 1f));
+                }
+
+                case RenderColorMode.Confidence:
+                    return Turbo(Math.Clamp(point.Confidence, 0f, 1f));
+
+                default:
+                    return point.Color;
+            }
+        }
+
+        /// <summary>
+        /// Google's Turbo colormap: a high-contrast blue-cyan-green-yellow-red
+        /// palette similar to LiDAR height/intensity colouring.
+        /// </summary>
+        private static GLVector3 Turbo(double t)
+        {
+            t = Math.Clamp(t, 0.0, 1.0);
+            double t2 = t * t;
+            double t3 = t2 * t;
+            double t4 = t3 * t;
+            double t5 = t4 * t;
+
+            double r = 0.13572138 + 4.61539260 * t - 42.66032258 * t2
+                     + 132.13108234 * t3 - 152.94239396 * t4 + 59.28637943 * t5;
+            double g = 0.09140261 + 2.19418839 * t + 4.84296658 * t2
+                     - 14.18503333 * t3 + 4.27729857 * t4 + 2.82956604 * t5;
+            double b = 0.10667330 + 12.64194608 * t - 60.58204836 * t2
+                     + 110.36276771 * t3 - 89.90310912 * t4 + 27.34824973 * t5;
+
+            return new GLVector3(
+                (float)Math.Clamp(r, 0.0, 1.0),
+                (float)Math.Clamp(g, 0.0, 1.0),
+                (float)Math.Clamp(b, 0.0, 1.0));
         }
 
         private static GLVector3 SemanticColor(string label)

@@ -104,6 +104,8 @@ namespace HySlam.Core
         private void InitializeRenderer()
         {
             renderer = new MapRenderer();
+            renderer.Options.ColorMode = options.ColorMode;
+            renderer.Options.ShowGrid = options.ShowGrid;
             Log.Information("Map Renderer initialized.");
             if(renderer == null)
             {
