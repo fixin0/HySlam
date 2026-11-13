@@ -6,6 +6,34 @@ using GLVector3 = OpenTK.Mathematics.Vector3;
 
 namespace HySlam.Core.Rendering
 {
+    /// <summary>
+    /// Rendering options for the map viewer.
+    /// </summary>
+    public sealed class RenderOptions
+    {
+        /// <summary>
+        /// Only points whose semantic label is in this set are rendered.
+        /// Null means render all labels.
+        /// </summary>
+        public HashSet<string>? SemanticFilter { get; set; }
+
+        /// <summary>
+        /// Points with confidence below this value are not rendered.
+        /// </summary>
+        public float MinConfidence { get; set; }
+
+        /// <summary>
+        /// When true, points are coloured by semantic label instead of their
+        /// sampled colour.
+        /// </summary>
+        public bool ColorBySemantic { get; set; }
+
+        /// <summary>
+        /// When true, points outside the camera frustum are not uploaded.
+        /// </summary>
+        public bool EnableFrustumCulling { get; set; }
+    }
+
     internal sealed class MapRenderer : IDisposable
     {
         private readonly Shader shader;
@@ -23,6 +51,9 @@ namespace HySlam.Core.Rendering
         // Interactive runs follow the newest trajectory sample. A loaded map is
         // static, so the camera is framed once and then left to the user.
         private bool followTrajectory = true;
+
+        // Rendering options.
+        private readonly RenderOptions options = new();
 
         public MapRenderer()
         {
@@ -47,6 +78,8 @@ namespace HySlam.Core.Rendering
             GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
         }
 
+        /// <summary>Gets the mutable render options.</summary>
+        public RenderOptions Options => options;
 
         public void Orbit(float deltaX, float deltaY)
         {
@@ -116,13 +149,49 @@ namespace HySlam.Core.Rendering
             int lineStart = 0;
             int lineCount = lines.Count / 6;
 
-            // Point cloud
+            // Build frustum planes for culling when a pose is available.
+            Matrix4? frustumMVP = null;
+            if (pose is not null && options.EnableFrustumCulling)
+            {
+                GLVector3 fcEye, fcTarget, fcUp;
+                GetFreeCamera(map, out fcEye, out fcTarget, out fcUp);
+                float fcAspect = (float)size.X / size.Y;
+                var fcProjection = Matrix4.CreatePerspectiveFieldOfView(
+                    MathHelper.DegreesToRadians(60f), fcAspect, 0.1f, 2000f);
+                var fcView = Matrix4.LookAt(fcEye, fcTarget, fcUp);
+                frustumMVP = fcView * fcProjection;
+            }
+
+            // Point cloud with optional semantic filtering, confidence threshold
+            // and frustum culling.
             int pointStart = lineCount;
+            int renderedPoints = 0;
+
             foreach (var p in map.Points)
             {
-                AddVertex(points, p.Position.X, p.Position.Y, p.Position.Z, p.Color.X, p.Color.Y, p.Color.Z);
+                // Semantic filter.
+                if (options.SemanticFilter is not null &&
+                    !options.SemanticFilter.Contains(p.SemanticLabel))
+                    continue;
+
+                // Confidence threshold.
+                if (p.Confidence < options.MinConfidence)
+                    continue;
+
+                // Frustum culling.
+                if (frustumMVP.HasValue && !IsPointInFrustum(p.Position, frustumMVP.Value))
+                    continue;
+
+                var color = options.ColorBySemantic
+                    ? SemanticColor(p.SemanticLabel)
+                    : p.Color;
+
+                AddVertex(points, p.Position.X, p.Position.Y, p.Position.Z,
+                    color.X, color.Y, color.Z);
+                renderedPoints++;
             }
-            int pointCount = map.Points.Count;
+
+            int pointCount = renderedPoints;
 
             // Trajectory (bright green points)
             int trajStart = pointStart + pointCount;
@@ -187,6 +256,7 @@ namespace HySlam.Core.Rendering
             if (pointCount > 0)
             {
                 shader.SetInt("uRoundPoints", 1);
+                // Point size varies with confidence: confident points are larger.
                 shader.SetFloat("uPointSize", 5.0f);
                 GL.DrawArrays(PrimitiveType.Points, pointStart, pointCount);
             }
@@ -200,6 +270,38 @@ namespace HySlam.Core.Rendering
 
             GL.BindVertexArray(0);
             GL.UseProgram(0);
+        }
+
+        private static bool IsPointInFrustum(GLVector3 point, Matrix4 mvp)
+        {
+            // Transform point to clip space: v_clip = MVP * v_model (manual mul to avoid
+            // Vector4.Transform overload ambiguity with Quaternion).
+            float x = mvp.Row0.X * point.X + mvp.Row0.Y * point.Y + mvp.Row0.Z * point.Z + mvp.Row0.W;
+            float y = mvp.Row1.X * point.X + mvp.Row1.Y * point.Y + mvp.Row1.Z * point.Z + mvp.Row1.W;
+            float z = mvp.Row2.X * point.X + mvp.Row2.Y * point.Y + mvp.Row2.Z * point.Z + mvp.Row2.W;
+            float w = mvp.Row3.X * point.X + mvp.Row3.Y * point.Y + mvp.Row3.Z * point.Z + mvp.Row3.W;
+
+            // Perspective divide.
+            if (Math.Abs(w) < 1e-6f)
+                return false;
+
+            // Normalised device coordinates are in [-1, 1] for points inside the
+            // frustum (with the OpenGL convention used by OpenTK).
+            return x >= -w && x <= w &&
+                   y >= -w && y <= w &&
+                   z >= -w && z <= w;
+        }
+
+        private static GLVector3 SemanticColor(string label)
+        {
+            return label switch
+            {
+                "ground" => new GLVector3(0.3f, 0.8f, 0.3f),      // green
+                "vegetation" => new GLVector3(0.5f, 1.0f, 0.5f), // bright green
+                "building" => new GLVector3(0.8f, 0.8f, 0.8f),   // gray
+                "sky" => new GLVector3(0.3f, 0.5f, 1.0f),        // blue
+                _ => new GLVector3(1.0f, 1.0f, 1.0f),            // white
+            };
         }
 
         private void GetFreeCamera(MapData map, out GLVector3 eye, out GLVector3 target, out GLVector3 up)
