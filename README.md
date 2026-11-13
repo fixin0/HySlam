@@ -4,8 +4,10 @@ A modularized monocular visual SLAM demo built with OpenTK (OpenGL) and OpenCVSh
 It reads frames from a video file, converts them to grayscale for all vision processing,
 tracks near-field road features with pyramidal Lucas-Kanade optical flow, estimates a
 metric 3-DOF camera motion (yaw + translation) on the road plane, triangulates above-road
-structure, colors each point from the source video, and renders a dual view (top-down +
-free camera) of the resulting map.
+structure, colors each point from the source video, and renders a single full-window
+free-camera view of the resulting map. An optional headless `--bake` mode processes
+the whole clip in several passes and exports the best-scoring result. A read-only
+`--load` viewer and a headless `--verify` check reopen that export without the video.
 
 > **Experimental project.** HySlam is a research and teaching prototype, not a
 > production SLAM system. It deliberately keeps a small, inspectable pipeline
@@ -22,7 +24,8 @@ free camera) of the resulting map.
 | Motion | 3-DOF planar motion: yaw plus forward/lateral translation. Roll, pitch changes and vertical motion are not modelled |
 | Ground | Locally planar and visible in the lower part of the frame |
 | Scale | Fixed by `--camera-height` and the focal length; a wrong height or focal length scales the whole trajectory |
-| Mapping | Sparse points from one active keyframe; no loop closure, relocalization or bundle adjustment |
+| Mapping | Sparse points from recent keyframes (multi-keyframe triangulation); no loop closure, relocalization or bundle adjustment |
+| Modes | Interactive OpenGL viewer, headless multi-pass `--bake`, read-only `--load` viewer, headless `--verify` |
 | Output | Approximate trajectory and point cloud for inspection, not metrology or control |
 
 ## Quick start
@@ -35,8 +38,7 @@ dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road
 ```
 
 The repository does not include videos or images, so `--path` must point to a
-local clip. Press `Esc` to close the preview and the OpenGL window. Show every
-option with:
+local clip. Press `Esc` to close the interactive viewer. Show every option with:
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --help
@@ -49,6 +51,20 @@ dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road
   --preset:road --max-frames 120 --deterministic
 ```
 
+For a headless multi-pass export of the whole clip:
+
+```powershell
+dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road.mp4 `
+  --preset:road --bake --bake-passes 5
+```
+
+To inspect or validate an existing export without the video:
+
+```powershell
+dotnet run --project HySlam\HySlam.csproj -- --load C:\runs\bake_road
+dotnet run --project HySlam\HySlam.csproj -- --verify C:\runs\bake_road
+```
+
 ## Project Structure
 
 ```
@@ -59,17 +75,30 @@ HySlam/
 ├── HySlam.csproj
 │
 ├── Core/
-│   ├── WindowManager.cs            // OpenTK lifecycle (OnLoad, OnUpdate, OnRender, OnUnload)
+│   ├── WindowManager.cs            // OpenTK lifecycle and interactive loop
+│   ├── LoadedMapWindow.cs          // Read-only viewer for an exported map
 │   ├── RunOptions.cs               // Parsed command line configuration
+│   │
+│   ├── Bake/
+│   │   ├── BakeOptions.cs          // Pass count, output directory, keyframe budget
+│   │   ├── BakeRunner.cs           // Headless multi-pass orchestration and export
+│   │   ├── BakePassResult.cs       // Per-pass map, steps, frame metrics, settings
+│   │   ├── BakeScorer.cs           // Comparable score for each pass
+│   │   └── ProgressBar.cs          // Percentage bar with ETA and redirected fallback
 │   │
 │   ├── Slam/
 │   │   ├── SlamEngine.cs           // OpenCV pipeline (optical flow, pose, triangulation)
+│   │   ├── MotionPredictor.cs      // Constant-velocity forecast and outlier gate
+│   │   ├── PosePriorStep.cs        // Previous-pass motion prior for one frame
 │   │   ├── CameraCalibration.cs    // Intrinsics/distortion loading and scaling
 │   │   ├── CameraPose.cs           // Camera rotation + translation
-│   │   └── KeyframeManager.cs      // Keyframe creation and management
+│   │   └── KeyframeManager.cs      // Bounded keyframe history
 │   │
 │   ├── Diagnostics/
-│   │   └── RunRecorder.cs          // metrics.csv, points.csv, trajectory.csv, summary.txt
+│   │   ├── RunRecorder.cs          // metrics.csv, points.csv, trajectory.csv, summary.txt
+│   │   ├── MapFileReader.cs        // Reads an exported map back into MapData
+│   │   ├── BakeVerifier.cs         // Headless cross-check of a bake output
+│   │   └── LogControl.cs           // Runtime Serilog level switch used by the bake bar
 │   │
 │   ├── Data/
 │   │   ├── MapPoint.cs             // A single 3D map point
@@ -77,12 +106,12 @@ HySlam/
 │   │   └── VoxelGrid.cs            // Spatial hash that prevents duplicate points
 │   │
 │   └── Rendering/
-│       ├── MapRenderer.cs          // All OpenGL drawing (VAO/VBO, draw calls, dual view)
+│       ├── MapRenderer.cs          // Single free-camera OpenGL view (VAO/VBO, draw calls)
 │       ├── Shader.cs               // Shader compilation/linking and uniform handling
 │       └── Shaders.glsl            // Vertex + fragment shader (#vertex / #fragment)
 │
 └── UI/
-    └── CameraFeedWindow.cs         // VideoCapture + Cv2.ImShow (2D video window)
+    └── CameraFeedWindow.cs         // VideoCapture wrapper (no OpenCV preview window)
 ```
 
 ## Requirements
@@ -195,9 +224,11 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | Option | Value | Default | Accepted range | Effect |
 | --- | --- | --- | --- | --- |
 | `--source` | `video` | `video` | only `video` | Frame source. Anything else exits with an error |
-| `--path` | file path | required | existing, readable file | Video decoded by OpenCV. Relative paths resolve against the current working directory |
+| `--path` | file path | required for video runs | existing, readable file | Video decoded by OpenCV. Required unless `--load` or `--verify` is used. Relative paths resolve against the current working directory |
 | `--calib` | file path | none | valid `key=value` file | Real intrinsics and distortion. Overrides `--fov`; see [Calibration](#calibration) |
 | `--dump` | directory | none | any writable path | Writes `metrics.csv`, `points.csv`, `trajectory.csv` and `summary.txt`. The directory is created when missing |
+| `--load` | directory | none | existing map directory | Opens `points.csv` and `trajectory.csv` in the read-only viewer; no video is decoded. Mutually exclusive with `--verify` and `--bake` |
+| `--verify` | directory | none | existing bake output | Validates the five bake files headlessly and exits with code `0` or `1`. Mutually exclusive with `--load` and `--bake` |
 | `--max-frames` | integer | `0` (unlimited) | `>= 1` | Stop after `N` decoded source frames. Only every third frame is processed, so `--max-frames 120` feeds about 40 frames to the pipeline |
 | `--deterministic` | flag | off | no value | Read one source frame per update instead of wall-clock pacing; also seeds OpenCV RNG |
 | `--camera-height` | meters | `1.3` | `> 0` | Camera height above the road. Sets the metric scale of the whole trajectory |
@@ -214,7 +245,16 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | `--lk-window` | pixels | preset (road `21`) | odd, `5 .. 61` | Lucas-Kanade search window size |
 | `--lk-levels` | integer | preset (road `3`) | `0 .. 6` | Lucas-Kanade pyramid levels |
 | `--lk-error` | pixels | preset (road `20`) | `> 0` | Maximum per-point LK error for a match to count |
+| `--bake` | flag | off | no value | Run headless and process the whole clip in multiple passes. Implies `--deterministic` and replaces `--dump` |
+| `--bake-passes` | integer | `5` | `1 .. 10` | Number of passes. `1` is a plain baseline; `5` is the recommended full bake |
+| `--bake-output` | directory | `runs/bake_<timestamp>` | any writable path | Directory for the selected pass's CSV files and reports |
+| `--bake-max-keyframes` | integer | `512` | `8 .. 8192` | Keyframe history kept per pass; a larger history allows triangulation from older baselines |
 | `--help`, `-h` | none | - | - | Print the built-in `usage.txt` and exit with code `0` |
+
+The three `--bake-*` options require `--bake`. A bake writes only to
+`--bake-output`; `--dump` is ignored in that mode. `--load` and `--verify` are
+mutually exclusive and cannot be combined with `--bake`; `--path` and `--dump`
+are ignored in read-back mode.
 
 Bounds are validated after the preset and the explicit options are merged, not while each
 argument is read. For example `--preset:city --min-depth 25 --max-depth 26` succeeds because
@@ -224,6 +264,7 @@ the resulting window is valid, while `--preset:city --min-depth 25` fails becaus
 When the video ends (or `--max-frames` is reached), the window stays open so the map can be
 inspected and the dump is finalized. The process exits with code `0` on success or after
 `--help`, and with code `1` on invalid arguments, an unknown option or a missing file.
+`--verify` returns `0` only when every cross-check passes.
 
 ### Settings and precedence
 
@@ -244,8 +285,9 @@ Consequences worth remembering:
   while `--help --bogus` prints the help text and exits with code `0`.
 - Numbers use the invariant culture: write `1.25` and `0.70`, never `1,25` or `0,70`.
   Angles, distances, integers and band fractions are parsed the same way in every locale.
-- Relative paths for `--path`, `--calib` and `--dump` are converted to absolute paths against
-  the directory you start the process from, not the project directory.
+- Relative paths for `--path`, `--calib`, `--dump`, `--load` and `--verify` are converted
+  to absolute paths against the directory you start the process from, not the project
+  directory.
 - `--calib` replaces the intrinsics from `--fov`, so a calibration run does not need `--fov`.
 - A preset changes only numeric scene settings. It never overrides `--camera-height`,
   `--dump`, `--max-frames`, `--deterministic` or the input path.
@@ -401,6 +443,174 @@ see where tracking, the RANSAC fit or the structure triangulation starts to fail
   motion. Keep the camera level, avoid panning while walking, and use a shorter
   keyframe interval or a smaller `--max-step`.
 
+### 11. Offline multi-pass bake
+
+```powershell
+dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\mountain.mp4 `
+  --preset:mountain --camera-height 1.3 --bake --bake-passes 5
+```
+
+No window opens. Each pass is scored, and the best result is written to
+`runs/bake_<timestamp>`. Use `--bake-passes 2` for a quick preview; see
+[Offline bake](#offline-bake) for the pass plan and output files.
+
+### 12. Inspect or validate an export
+
+```powershell
+dotnet run --project HySlam\HySlam.csproj -- --load C:\runs\bake_road
+dotnet run --project HySlam\HySlam.csproj -- --verify C:\runs\bake_road
+```
+
+`--load` reopens the exported point cloud and trajectory in the free-camera
+viewer without the video. `--verify` checks the five bake files against
+`summary.txt` and exits non-zero on a mismatch. See
+[Reading a bake output](#reading-a-bake-output).
+
+## Offline bake
+
+`--bake` turns HySlam into a headless batch tool. It processes the complete clip
+several times instead of showing the interactive viewer, keeps the best result and
+writes it to disk. Use it when the window is only needed for inspection and the
+final map or trajectory matters.
+
+```powershell
+.\HySlam\bin\Debug\net10.0\HySlam.exe --source:video --path C:\clips\road.mp4 `
+  --preset:road --camera-height 1.3 --bake --bake-passes 5 `
+  --bake-output C:\runs\bake_road
+```
+
+### Pass plan
+
+| Pass | Name | What changes | Why |
+| --- | --- | --- | --- |
+| 1 | `baseline` | Preset parameters, no prior | Produces the reference trajectory and the per-frame metrics |
+| 2 | `adaptive` | Wider LK search, one more pyramid level, 25% higher LK error and a 20% larger step cap when the baseline left gaps | Recovers frames where tracking collapsed |
+| 3 | `guided` | Wider LK window, 10% stricter LK error and the best trajectory so far as a per-frame motion prior | Rejects jumps and keeps the trajectory smooth through weak segments |
+| 4 | `structure` | Half the keyframe interval, up to five structure keyframes and a 400-point triangulation budget (default 220) | Fills map gaps with more and denser triangulation baselines |
+| 5 | `cleanup` | Structure settings plus removal of points observed only once, when at least 30% of the points are confirmed | Removes noise and decides the final result |
+
+Passes beyond five repeat the cleanup plan with a slightly wider LK search. They
+are accepted (`--bake-passes 1..10`) but rarely improve the result.
+
+### Scoring and selection
+
+Every pass gets one comparable score:
+
+```text
+score = 0.35 * mean_inlier_ratio
+      + 0.25 * coverage
+      + 0.20 * density
+      + 0.20 * smoothness
+```
+
+- `mean_inlier_ratio` is the average `inliers / matches` over processed frames.
+- `coverage` is the fraction of processed frames with at least 30 inliers.
+- `density` is confirmed map points per processed frame, saturated at 250. A point
+  is confirmed when it was observed at least twice.
+- `smoothness` is `1 - normalized_step_jerk`; sudden step changes lower it.
+
+`passes.csv` lists every pass and marks the selected one. The selected pass is not
+necessarily the last pass: a pass that lost tracking or produced a noisy map
+cannot win only because it ran later.
+
+### Progress and logging
+
+In a terminal the bake draws one line:
+
+```text
+Bake  [##########--------------]  48%  pass 3/5  frame 512/848  guided  ETA 00:37
+```
+
+When stdout is redirected, the same information is written every five percent as
+a normal line, so `> bake.log` stays readable. Per-frame engine traces are
+suppressed while the bar is active; pass summaries are logged between passes.
+
+### Output files
+
+| File | Contents |
+| --- | --- |
+| `points.csv` | Selected map: `x,y,z,r,g,b` |
+| `trajectory.csv` | Selected camera centers: `x,y,z` |
+| `metrics.csv` | Selected pass per-frame metrics: `frame,processed,matches,inliers,inlier_ratio,triangulated,total_points,motion_valid,step_m,yaw_deg` |
+| `passes.csv` | One row per pass with score components, point count, path length and duration |
+| `summary.txt` | Selected pass, score, map size, confirmed points, effective settings and timing |
+
+### Bake limitations
+
+- There is still no loop closure, relocalization or bundle adjustment. A bake can
+  improve density and robustness on weak frames, but it cannot remove drift that
+  accumulated in every pass.
+- A bake is deterministic and roughly `passes` times slower than one interactive
+  run. The 5-pass default on a few minutes of 30 fps footage takes several minutes.
+- Each pass keeps up to `--bake-max-keyframes` keyframes. Raising the limit uses
+  more memory; lowering it reduces the baselines available to the structure pass.
+- The planar-motion and metric-scale assumptions are unchanged. A wrong
+  `--camera-height` or a wrong horizon scales every pass in the same way.
+
+## Reading a bake output
+
+### Viewer (`--load`)
+
+```powershell
+.\HySlam\bin\Debug\net10.0\HySlam.exe --load C:\runs\bake_road
+```
+
+`--load` opens `points.csv` and `trajectory.csv` from the given directory in the
+same free-camera viewer used by a live run. No video is decoded and no tracking
+runs: the map is static, and the camera is framed on the whole point cloud and
+trajectory at startup. Left-drag orbits, the wheel zooms and `Esc` closes the
+window. The title shows the point count, trajectory sample count and path length.
+
+The same command opens a `--dump` directory, because the interactive recorder
+writes the same two CSV files. Without `summary.txt` the viewer still works.
+
+A point row may be `x,y,z` or `x,y,z,r,g,b`; an optional seventh `observations`
+column is read as well. Missing colors default to white. Values must use the
+invariant culture (`1.25`, not `1,25`) and be finite; a malformed row aborts the
+load with the file name and line number.
+
+### Verification (`--verify`)
+
+```powershell
+.\HySlam\bin\Debug\net10.0\HySlam.exe --verify C:\runs\bake_road
+```
+
+`--verify` is a headless consistency check for a bake output. It requires all
+five files, then reports one line per check:
+
+```text
+Verification of C:\runs\bake_road
+  [ok]   map loaded: 35896 points, 818 trajectory samples, path 339.25 m, span 325.15 m.
+  [ok]   summary.txt parsed: 34 keys.
+  [ok]   points.csv count 35896 matches summary.txt (35896).
+  [ok]   trajectory path 339.25 m matches summary.txt (339.25 m).
+  ...
+  [ok]   passes.csv selected name 'cleanup' matches summary.txt.
+  [ok]   passes.csv selected points match the exported map and summary.txt.
+  [ok]   passes.csv selected score matches summary.txt.
+  [warn] points.csv has no 'observations' column; confirmed points were not cross-checked.
+  Verification passed: 16 checks, 1 warnings.
+```
+
+The checks cover:
+
+- all five files exist and both map CSVs parse into finite numbers;
+- `points.csv` and `trajectory.csv` counts match `summary.txt`;
+- the recomputed path and span match the reported values within a small rounding
+  tolerance;
+- the confirmed-point count matches when an `observations` column is present;
+- `metrics.csv` has the expected columns and one row per processed frame;
+- `passes.csv` has one row per bake pass and exactly one selected row, whose pass
+  number, name, point count and score match `summary.txt`.
+
+The exit code is `0` when every check passes and `1` when a file is missing, a CSV
+is malformed or any value disagrees. A warning does not fail verification; the
+current bake export has no observations column, so the confirmed-point comparison
+is normally reported as a warning.
+
+`--verify` is specific to a bake output because it expects `passes.csv`. Use
+`--load` to inspect a plain `--dump` run.
+
 ## Calibration
 
 A calibration file is a plain `key=value` text file. `fx`, `fy`, `cx`, `cy` are required;
@@ -541,6 +751,10 @@ The dump directory then contains:
 | `trajectory.csv` | Camera centers appended to the trajectory: `x,y,z` |
 | `summary.txt` | Video path, frame counts, map size, path length, span, duration and average speed |
 
+The same files can be reopened without the video with `--load <directory>`.
+`--verify` expects the bake-only `passes.csv`, so it validates a bake directory,
+not a plain dump.
+
 RANSAC is seeded with `Cv2.SetTheRNG(...)` at startup, so `--deterministic` runs of the
 same clip and options produce the same frame sequence and the same counters. Wall-clock
 pacing is disabled in this mode; one source frame is read per update.
@@ -549,25 +763,27 @@ pacing is disabled in this mode; one source frame is read per update.
 
 | Input | Action |
 | --- | --- |
-| Left mouse drag (right half) | Orbit the free camera |
-| Mouse wheel (right half) | Zoom in / out |
+| Left mouse drag | Orbit the free camera (anywhere in the window) |
+| Mouse wheel | Zoom in / out (anywhere in the window) |
 | `Esc` | Quit |
 
-In the OpenCV preview window, `Esc` also quits.
+The interactive viewer is a single full-window free camera. There is no separate
+top-down view and no OpenCV preview window. The `--load` viewer uses the same
+controls and frames the complete map when it opens.
 
 ## Pipeline
 
 1. `CameraFeedWindow` reads frames from the video file. `SlamEngine` optionally
    undistorts the frame, converts it to grayscale for every vision step, and samples
-   point colors from the same frame. The preview is drawn from the frame used by the
-   tracker so overlays line up.
+   point colors from the same frame.
 2. `WindowManager` paces playback using the video FPS and processes every third frame
    (`FrameSkip = 3`). With `--deterministic` it instead reads exactly one source frame
-   per update.
+   per update. A bake uses the same sampling but runs headless until the video ends.
 3. `KeyframeManager` detects ORB features when a keyframe is created (`ORB.Create(2000)`)
-   over the drivable part of the frame and keeps a single current keyframe with its
-   grayscale image, 2D feature points and world pose. A new keyframe replaces the previous
-   one. A keyframe is created at the start, after 30 processed frames, or when the camera
+   over the drivable part of the frame and keeps a bounded history of keyframes with their
+   grayscale images, 2D feature points and world poses. The interactive viewer keeps the
+   last 8 keyframes; a bake can keep up to `--bake-max-keyframes` keyframes. A keyframe
+   is created at the start, after `--keyframe-frames` processed frames, or when the camera
    has rotated `>= 15 deg` / moved `>= 1.5 m` since the current keyframe.
 4. `SlamEngine` estimates motion from the road plane instead of a general essential
    matrix:
@@ -592,15 +808,16 @@ In the OpenCV preview window, `Esc` also quits.
 5. The map combines two point sources:
    - **Road points** come directly from the ground-plane projection of inlier matches.
      They are placed exactly on the road (`y = 0`) using level road coordinates.
-   - **Structure points** are triangulated between the current keyframe and the current
-     frame with the pitch-aware relative pose. Points are kept with camera depth
+   - **Structure points** are triangulated between the recent keyframes and the current
+     frame with the pitch-aware relative pose (the last 3 keyframes interactively, up to 5
+     in the bake structure pass). Points are kept with camera depth
      `0.5-45 m`, parallax `>= 0.3 deg`, reprojection error `<= 2.0 px`, at least `0.4 m`
      above the road and within `30 m` lateral / `80 m` longitudinal of the camera.
    - Both kinds use a `0.3 m` voxel spacing to avoid duplicate clusters.
-6. `MapRenderer` uploads the current map each frame and draws two viewports:
-   a top-down orthographic view and a perspective free view. Both use a pure black
-   background. Map point colors are sampled from the source video; the free view adds a
-   major/minor ground grid and a vertical height axis with 5-unit ticks.
+6. `MapRenderer` uploads the current map each frame and draws one full-window
+   perspective free camera. It uses a pure black background. Map point colors are
+   sampled from the source video; the view adds a major/minor ground grid, a vertical
+   height axis with 5-unit ticks and a camera frustum.
 
 ## Repository and data policy
 
@@ -636,13 +853,20 @@ explicitly with `git add -f` only after checking its license and privacy.
 - **Reproducibility:** `--deterministic` disables wall-clock pacing and reads one source
   frame per update. `Cv2.SetTheRNG(...)` seeds OpenCV's RANSAC at startup, and the
   custom odometry RANSAC uses its own fixed seed, so repeated runs with the same input
-  produce byte-identical CSV dumps.
+  produce byte-identical CSV dumps. `--bake` always enables deterministic mode.
+- **Offline bake:** `--bake` runs the whole clip in 1-10 passes without an OpenGL window,
+  chains the best trajectory into the next pass as a motion prior, raises the structure
+  triangulation budget in the completion pass and exports only the best-scoring pass. See
+  [Offline bake](#offline-bake).
+- **Read-back:** `--load` reads the exported `points.csv`/`trajectory.csv` back into the
+  viewer without a video, and `--verify` cross-checks a bake directory against
+  `summary.txt`. See [Reading a bake output](#reading-a-bake-output).
 - **Tracking:** odometry uses near-field road features only; the keyframe path is used for
   structure triangulation. There is no descriptor matching at runtime, no covisibility
   graph, relocalization, loop closure or bundle adjustment.
-- **Grayscale processing:** the video preview, feature detection, optical flow and pose
-  estimation are all grayscale. Map point colors are sampled from the source video;
-  the trajectory remains green.
+- **Grayscale processing:** feature detection, optical flow and pose estimation are all
+  grayscale. Map point colors are sampled from the source video; the trajectory remains
+  green.
 - **No distance fade:** points keep their full color in the free view, even when the
   camera is zoomed far out.
 - **Depth/height cues:** the free view draws a brighter major grid every 25 units, a
@@ -652,7 +876,5 @@ explicitly with `git add -f` only after checking its license and privacy.
   depth, parallax, reprojection error and distance from the camera. The remaining points
   use a `0.3`-unit voxel spacing, so the cloud stays sparse and clean instead of
   collapsing into duplicate clusters.
-- **Overlay colors:** green circles are the features tracked from the previous frame, red
-  circles are the features in the current frame.
 - **Limits:** the map is capped at 150,000 points (trimmed to 100,000) to keep rendering
   responsive.

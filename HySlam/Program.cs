@@ -1,5 +1,8 @@
 ﻿using System.Globalization;
 using HySlam.Core;
+using HySlam.Core.Bake;
+using HySlam.Core.Data;
+using HySlam.Core.Diagnostics;
 using HySlam.Core.Slam;
 using Serilog;
 using Serilog.Events;
@@ -78,7 +81,7 @@ namespace HySlam
             // the same pipeline as the rest of the application. Errors go to stderr,
             // regular information stays on stdout; --help output is printed directly.
             Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Information()
+                .MinimumLevel.ControlledBy(LogControl.LevelSwitch)
                 .WriteTo.Console(standardErrorFromLevel: LogEventLevel.Error)
                 .CreateLogger();
 
@@ -107,6 +110,47 @@ namespace HySlam
                 if (result == ParseResult.Error)
                     return 1;
 
+                if (options!.VerifyDirectory is not null)
+                {
+                    Log.Information("Verifying the bake output; no window is opened.");
+                    return BakeVerifier.Run(options.VerifyDirectory);
+                }
+
+                if (options.LoadDirectory is not null)
+                {
+                    Log.Information("Loading the map; no video is decoded.");
+
+                    MapData map;
+                    try
+                    {
+                        map = MapFileReader.Read(options.LoadDirectory);
+                    }
+                    catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+                    {
+                        Log.Error("Error: could not read the map: {Message}", exception.Message);
+                        return 1;
+                    }
+
+                    Log.Information(
+                        "Loaded {Points} points and {Trajectory} trajectory samples from {Directory}.",
+                        map.Points.Count,
+                        map.Trajectory.Count,
+                        options.LoadDirectory);
+
+                    using var mapWindow = new LoadedMapWindow(options.LoadDirectory, map);
+                    Log.Information("Entering the map viewer.");
+                    mapWindow.Run();
+                    Log.Information("Map viewer closed normally.");
+                    return 0;
+                }
+
+                if (options.Bake is not null)
+                {
+                    Log.Information("Starting the offline bake; no window is opened.");
+                    var bakeRunner = new BakeRunner(options);
+                    return bakeRunner.Run();
+                }
+
                 Log.Information("Creating the game window.");
                 using var application = new WindowManager(options!);
                 Log.Information("Entering the main loop.");
@@ -128,7 +172,10 @@ namespace HySlam
         /// <summary>
         /// Parses the command line and prints usage or error messages when needed.
         /// Supports --source:video, --path:file, --calib:file, --dump:directory,
-        /// --max-frames:N, --deterministic and the separated option forms.
+        /// --load:directory, --verify:directory, --max-frames:N, --deterministic, the
+        /// scene and tracking options, and the offline bake options (--bake,
+        /// --bake-passes, --bake-output, --bake-max-keyframes) in both the joined and
+        /// the separated forms.
         /// </summary>
         private static ParseResult ParseArguments(string[] args, out RunOptions? options)
         {
@@ -137,6 +184,8 @@ namespace HySlam
             string? videoPath = null;
             string? calibrationPath = null;
             string? dumpDirectory = null;
+            string? loadDirectory = null;
+            string? verifyDirectory = null;
             string source = "video";
             int maxFrames = 0;
             bool deterministic = false;
@@ -154,6 +203,11 @@ namespace HySlam
             int? lkLevels = null;
             double? lkError = null;
             string scenePreset = "road";
+            bool bake = false;
+            bool bakeOptionUsed = false;
+            int bakePasses = 5;
+            string? bakeOutput = null;
+            int bakeMaxKeyframes = 512;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -195,6 +249,20 @@ namespace HySlam
                                 return ParseResult.Error;
 
                             dumpDirectory = Path.GetFullPath(dumpValue);
+                            break;
+
+                        case "--load":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? loadValue))
+                                return ParseResult.Error;
+
+                            loadDirectory = Path.GetFullPath(loadValue);
+                            break;
+
+                        case "--verify":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? verifyValue))
+                                return ParseResult.Error;
+
+                            verifyDirectory = Path.GetFullPath(verifyValue);
                             break;
 
                         case "--max-frames":
@@ -353,6 +421,53 @@ namespace HySlam
                             lkError = lkErrorParsed;
                             break;
 
+                        case "--bake":
+                            if (!string.IsNullOrEmpty(inlineValue))
+                            {
+                                Log.Error("Error: '--bake' does not take a value.");
+                                return ParseResult.Error;
+                            }
+
+                            bake = true;
+                            bakeOptionUsed = true;
+                            break;
+
+                        case "--bake-passes":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? bakePassesValue) ||
+                                !int.TryParse(bakePassesValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out bakePasses) ||
+                                bakePasses < 1 || bakePasses > 10)
+                            {
+                                Log.Error(
+                                    "Error: '--bake-passes' must be an integer between 1 and 10, got '{Value}'.",
+                                    bakePassesValue);
+                                return ParseResult.Error;
+                            }
+
+                            bakeOptionUsed = true;
+                            break;
+
+                        case "--bake-output":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? bakeOutputValue))
+                                return ParseResult.Error;
+
+                            bakeOutput = Path.GetFullPath(bakeOutputValue);
+                            bakeOptionUsed = true;
+                            break;
+
+                        case "--bake-max-keyframes":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? bakeKeyframesValue) ||
+                                !int.TryParse(bakeKeyframesValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out bakeMaxKeyframes) ||
+                                bakeMaxKeyframes < 8 || bakeMaxKeyframes > 8192)
+                            {
+                                Log.Error(
+                                    "Error: '--bake-max-keyframes' must be an integer between 8 and 8192, got '{Value}'.",
+                                    bakeKeyframesValue);
+                                return ParseResult.Error;
+                            }
+
+                            bakeOptionUsed = true;
+                            break;
+
                         default:
                             Log.Error("Error: unknown argument '{Argument}'.", name);
                             PrintUsage();
@@ -373,9 +488,49 @@ namespace HySlam
                 return ParseResult.Error;
             }
 
+            if (loadDirectory is not null && verifyDirectory is not null)
+            {
+                Log.Error("Error: '--load' and '--verify' cannot be used together.");
+                return ParseResult.Error;
+            }
+
+            bool readBack = loadDirectory is not null || verifyDirectory is not null;
+
+            if (readBack)
+            {
+                if (bake || bakeOptionUsed)
+                {
+                    Log.Error(
+                        "Error: '--bake', '--bake-passes', '--bake-output' and '--bake-max-keyframes' " +
+                        "cannot be combined with '--load' or '--verify'.");
+                    return ParseResult.Error;
+                }
+
+                string directory = (loadDirectory ?? verifyDirectory)!;
+                if (!Directory.Exists(directory))
+                {
+                    Log.Error("Error: directory not found: {Directory}", directory);
+                    return ParseResult.Error;
+                }
+
+                if (!string.IsNullOrWhiteSpace(videoPath))
+                    Log.Warning("Read-back mode ignores '--path'; no video is decoded.");
+                if (dumpDirectory is not null)
+                    Log.Warning("Read-back mode ignores '--dump'.");
+
+                options = new RunOptions
+                {
+                    VideoPath = null,
+                    LoadDirectory = loadDirectory,
+                    VerifyDirectory = verifyDirectory
+                };
+
+                return ParseResult.Run;
+            }
+
             if (string.IsNullOrWhiteSpace(videoPath))
             {
-                Log.Error("Error: '--path' is required.");
+                Log.Error("Error: '--path' is required unless '--load' or '--verify' is used.");
                 PrintUsage();
                 return ParseResult.Error;
             }
@@ -442,6 +597,37 @@ namespace HySlam
                 return ParseResult.Error;
             }
 
+            if (!bake && bakeOptionUsed)
+            {
+                Log.Error("Error: '--bake-passes', '--bake-output' and '--bake-max-keyframes' require '--bake'.");
+                return ParseResult.Error;
+            }
+
+            BakeOptions? bakeOptions = null;
+            if (bake)
+            {
+                string outputDirectory = bakeOutput ?? Path.GetFullPath(
+                    Path.Combine("runs", $"bake_{DateTime.Now:yyyyMMdd_HHmmss}"));
+
+                bakeOptions = new BakeOptions
+                {
+                    Passes = bakePasses,
+                    OutputDirectory = outputDirectory,
+                    MaxKeyframes = bakeMaxKeyframes
+                };
+
+                if (dumpDirectory is not null)
+                {
+                    Log.Warning(
+                        "Bake ignores '--dump'; the selected result is written to {OutputDirectory}.",
+                        outputDirectory);
+                }
+
+                // A bake must be reproducible: the same clip and options always have
+                // to produce the same passes and the same selected result.
+                deterministic = true;
+            }
+
             CameraCalibration? calibration = null;
             if (calibrationPath is not null)
             {
@@ -459,8 +645,10 @@ namespace HySlam
             options = new RunOptions
             {
                 VideoPath = videoPath,
+                LoadDirectory = loadDirectory,
+                VerifyDirectory = verifyDirectory,
                 Calibration = calibration,
-                DumpDirectory = dumpDirectory,
+                DumpDirectory = bakeOptions is null ? dumpDirectory : null,
                 MaxFrames = maxFrames,
                 Deterministic = deterministic,
                 CameraHeight = cameraHeight,
@@ -476,7 +664,8 @@ namespace HySlam
                 ScenePreset = scene.Name,
                 LkWindowSize = effectiveLkWindow,
                 LkLevels = effectiveLkLevels,
-                LkError = effectiveLkError
+                LkError = effectiveLkError,
+                Bake = bakeOptions
             };
 
             return ParseResult.Run;

@@ -10,6 +10,17 @@ namespace HySlam.Core.Data
 
         public bool IsTooClose(IReadOnlyList<MapPoint> points, float x, float y, float z)
         {
+            return TryFindNear(points, x, y, z, out _);
+        }
+
+        /// <summary>
+        /// Finds an existing map point inside the minimum-spacing neighbourhood. Used by
+        /// the bake passes to count repeated observations of the same structure instead
+        /// of adding a duplicate point.
+        /// </summary>
+        public bool TryFindNear(IReadOnlyList<MapPoint> points, float x, float y, float z, out int index)
+        {
+            index = -1;
             int vx = (int)Math.Floor(x / VoxelSize), vy = (int)Math.Floor(y / VoxelSize), vz = (int)Math.Floor(z / VoxelSize);
             float min2 = VoxelSize * VoxelSize * 0.49f;
 
@@ -20,9 +31,14 @@ namespace HySlam.Core.Data
                         if (!spatialIndex.TryGetValue((vx + dx, vy + dy, vz + dz), out var list)) continue;
                         foreach (var idx in list)
                         {
+                            if (idx < 0 || idx >= points.Count) continue;
                             var p = points[idx].Position;
                             float ddx = p.X - x, ddy = p.Y - y, ddz = p.Z - z;
-                            if (ddx * ddx + ddy * ddy + ddz * ddz < min2) return true;
+                            if (ddx * ddx + ddy * ddy + ddz * ddz < min2)
+                            {
+                                index = idx;
+                                return true;
+                            }
                         }
                     }
             return false;

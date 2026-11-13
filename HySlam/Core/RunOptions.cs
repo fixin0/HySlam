@@ -1,14 +1,31 @@
+using HySlam.Core.Bake;
 using HySlam.Core.Slam;
 
 namespace HySlam.Core
 {
     /// <summary>
     /// Immutable run configuration produced by the command line parser and consumed
-    /// by the window manager.
+    /// by the window manager, the bake runner and the read-back diagnostics.
     /// </summary>
     internal sealed class RunOptions
     {
-        public required string VideoPath { get; init; }
+        /// <summary>
+        /// Video decoded by the interactive viewer or the bake. Null in read-back
+        /// mode (--load / --verify), where only exported files are used.
+        /// </summary>
+        public string? VideoPath { get; init; }
+
+        /// <summary>
+        /// Map directory opened by the read-only viewer. The directory must contain
+        /// points.csv and trajectory.csv.
+        /// </summary>
+        public string? LoadDirectory { get; init; }
+
+        /// <summary>
+        /// Bake output directory validated headlessly. All five output files must
+        /// be present.
+        /// </summary>
+        public string? VerifyDirectory { get; init; }
 
         /// <summary>Optional real camera calibration. Null means use the FOV fallback.</summary>
         public CameraCalibration? Calibration { get; init; }
@@ -96,5 +113,12 @@ namespace HySlam.Core
 
         /// <summary>Maximum LK per-point error accepted as a valid match.</summary>
         public double LkError { get; init; } = 20.0;
+
+        /// <summary>
+        /// Offline bake configuration. When set the program runs headless, processes
+        /// the clip several times and writes the best result to the bake directory
+        /// instead of opening the interactive window.
+        /// </summary>
+        public BakeOptions? Bake { get; init; }
     }
 }

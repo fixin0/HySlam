@@ -20,6 +20,10 @@ namespace HySlam.Core.Rendering
         private float freeCamDistance = 40f;
         private GLVector3 freeCamTarget = GLVector3.Zero;
 
+        // Interactive runs follow the newest trajectory sample. A loaded map is
+        // static, so the camera is framed once and then left to the user.
+        private bool followTrajectory = true;
+
         public MapRenderer()
         {
             string shaderPath = Path.Combine(AppContext.BaseDirectory, "shaders", "Shaders.glsl");
@@ -57,7 +61,7 @@ namespace HySlam.Core.Rendering
             freeCamDistance = Math.Clamp(freeCamDistance, 5f, 500f);
         }
 
-        public void Render(Vector2i size, MapData map, CameraPose pose)
+        public void Render(Vector2i size, MapData map, CameraPose? pose)
         {
             // Single full-window free-camera view.
             GL.Viewport(0, 0, size.X, size.Y);
@@ -67,15 +71,47 @@ namespace HySlam.Core.Rendering
             RenderScene(size, map, pose);
         }
 
-        private void RenderScene(Vector2i size, MapData map, CameraPose pose)
+        /// <summary>
+        /// Frames the complete map once. Used for a loaded map, which has no camera
+        /// pose to follow, so the user starts with the whole point cloud in view.
+        /// </summary>
+        public void FrameMap(MapData map)
+        {
+            if (map.Points.Count == 0 && map.Trajectory.Count == 0)
+                return;
+
+            var min = new GLVector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            var max = new GLVector3(float.MinValue, float.MinValue, float.MinValue);
+
+            foreach (var position in map.Trajectory)
+            {
+                min = GLVector3.ComponentMin(min, position);
+                max = GLVector3.ComponentMax(max, position);
+            }
+
+            foreach (var point in map.Points)
+            {
+                min = GLVector3.ComponentMin(min, point.Position);
+                max = GLVector3.ComponentMax(max, point.Position);
+            }
+
+            freeCamTarget = (min + max) * 0.5f;
+            freeCamDistance = Math.Clamp((max - min).Length * 0.8f, 5f, 500f);
+            freeCamYaw = 45f;
+            freeCamPitch = 30f;
+            followTrajectory = false;
+        }
+
+        private void RenderScene(Vector2i size, MapData map, CameraPose? pose)
         {
             var lines = new List<float>();
             var points = new List<float>();
 
-            // Draw the ground grid, height axis and camera frustum.
+            // Draw the ground grid, height axis and, for a live run, the camera frustum.
             AddGroundGrid(lines);
             AddHeightAxis(lines);
-            AddCameraFrustum(lines, pose);
+            if (pose is not null)
+                AddCameraFrustum(lines, pose);
 
             int lineStart = 0;
             int lineCount = lines.Count / 6;
@@ -168,7 +204,7 @@ namespace HySlam.Core.Rendering
 
         private void GetFreeCamera(MapData map, out GLVector3 eye, out GLVector3 target, out GLVector3 up)
         {
-            if (map.Trajectory.Count > 0)
+            if (followTrajectory && map.Trajectory.Count > 0)
                 freeCamTarget = map.Trajectory[^1];
 
             float yawRad = MathHelper.DegreesToRadians(freeCamYaw);

@@ -21,17 +21,26 @@ namespace HySlam.Core.Slam
     internal sealed class KeyframeManager : IDisposable
     {
         public const int MinKeyframePoints = 50;
-        private const int MaxKeyframeHistory = 8;
+        public const int DefaultHistoryLimit = 8;
 
         private readonly ORB orb;
         private readonly List<Keyframe> keyframes = new();
+        private readonly int historyLimit;
         private Keyframe? currentKeyframe;
         private int nextKeyframeId = 1;
 
-        public KeyframeManager()
+        /// <summary>
+        /// Creates a keyframe history. The interactive viewer keeps a small window; the
+        /// offline bake uses a much longer one so structure can be triangulated from
+        /// distant baselines.
+        /// </summary>
+        public KeyframeManager(int historyLimit = DefaultHistoryLimit)
         {
+            this.historyLimit = Math.Max(2, historyLimit);
             orb = ORB.Create(2000);
         }
+
+        public int HistoryLimit => historyLimit;
 
         public Keyframe? Current => currentKeyframe;
 
@@ -72,7 +81,7 @@ namespace HySlam.Core.Slam
             foreach (var kp in kps) newKf.Points2D.Add(kp.Pt);
             
             // Keep only the most recent keyframes so memory stays bounded.
-            if (keyframes.Count >= MaxKeyframeHistory)
+            if (keyframes.Count >= historyLimit)
             {
                 keyframes[0].Dispose();
                 keyframes.RemoveAt(0);

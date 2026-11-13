@@ -38,6 +38,18 @@ namespace HySlam.Core.Slam
         }
 
         /// <summary>
+        /// Seeds the forecast directly. The bake passes use it to hand the previous
+        /// pass's motion estimate to the next one.
+        /// </summary>
+        public void Seed(double yaw, double stepX, double stepZ)
+        {
+            predictedYaw = yaw;
+            predictedStepX = stepX;
+            predictedStepZ = stepZ;
+            hasPrediction = true;
+        }
+
+        /// <summary>
         /// Records an observed motion step and updates the forecast. Returns true when
         /// the observation was close enough to the previous forecast to be trusted.
         /// </summary>

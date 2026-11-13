@@ -12,6 +12,9 @@ namespace HySlam.UI
         public double FrameHeight => capture.FrameHeight;
         public double Fps => capture.Fps;
 
+        /// <summary>Source frame count reported by the container, or 0 when unknown.</summary>
+        public int FrameCount => capture.FrameCount;
+
         public CameraFeedWindow(string videoPath)
         {
             capture = new VideoCapture(videoPath);

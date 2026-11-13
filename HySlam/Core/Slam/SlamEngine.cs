@@ -51,7 +51,7 @@ namespace HySlam.Core.Slam
         private const double MinStructureHeight = 0.4;  // meters above the road
         private const int DefaultMaxFramesPerKeyframe = 30;
         private const int MaxRoadPointsPerFrame = 160;
-        private const int MaxStructurePointsPerFrame = 220;
+        private const int DefaultMaxStructurePointsPerFrame = 220;
         private const int MaxMapPoints = 150000;
 
         // Structure triangulation is the most expensive step; run it every N frames
@@ -86,6 +86,7 @@ namespace HySlam.Core.Slam
         private int maxFramesPerKeyframe = DefaultMaxFramesPerKeyframe;
         private double maxTranslationStep = DefaultMaxTranslationStep;
         private int maxStructureKeyframes = MaxStructureKeyframes;
+        private int maxStructurePointsPerFrame = DefaultMaxStructurePointsPerFrame;
 
         // Multi-keyframe structure: triangulate structure points from the last N
         // keyframes instead of a single one. This makes the map denser and more
@@ -103,6 +104,12 @@ namespace HySlam.Core.Slam
         private Mat? previousGray;
         private List<Point2f> previousPoints = new();
         private bool hasPreviousFrame;
+
+        // === Bake support ===
+        // A previous bake pass can supply the expected motion step for each processed
+        // frame. The estimate is still fitted from the image; the prior only seeds the
+        // predictor and takes over when tracking fails.
+        private IReadOnlyList<PosePriorStep>? posePrior;
 
         // Diagnostics: trace the first few calls in detail so a native crash inside
         // OpenCV can be located from the last logged stage.
@@ -135,6 +142,15 @@ namespace HySlam.Core.Slam
         public int InlierCount => inlierCount;
         public int TriangulatedCount => triangulatedCount;
 
+        /// <summary>True when the last processed frame produced an accepted motion fit.</summary>
+        public bool LastMotionValid { get; private set; } = true;
+
+        /// <summary>Motion step applied by the last processed frame (for bake priors).</summary>
+        public PosePriorStep LastStep { get; private set; }
+
+        /// <summary>Number of processed frames since Initialize (bake progress).</summary>
+        public int ProcessedFrames => processedFrames;
+
         /// <summary>
         /// The undistorted frame used for tracking, or null when no distortion
         /// correction is active. The preview should use the same frame so overlays
@@ -165,7 +181,8 @@ namespace HySlam.Core.Slam
             int lkWindowSize = 21,
             int lkLevels = 3,
             double maxLkError = DefaultMaxLkError,
-            int maxStructureKeyframes = MaxStructureKeyframes)
+            int maxStructureKeyframes = MaxStructureKeyframes,
+            int maxStructurePointsPerFrame = DefaultMaxStructurePointsPerFrame)
         {
             var calib = (calibration ?? CameraCalibration.Estimate(width, height, horizontalFovDegrees))
                 .ScaledTo(width, height);
@@ -211,6 +228,9 @@ namespace HySlam.Core.Slam
             this.maxFramesPerKeyframe = maxFramesPerKeyframe > 0 ? maxFramesPerKeyframe : DefaultMaxFramesPerKeyframe;
             this.maxTranslationStep = maxTranslationStep > 0 ? maxTranslationStep : DefaultMaxTranslationStep;
             this.maxStructureKeyframes = maxStructureKeyframes > 0 ? maxStructureKeyframes : MaxStructureKeyframes;
+            this.maxStructurePointsPerFrame = maxStructurePointsPerFrame > 0
+                ? maxStructurePointsPerFrame
+                : DefaultMaxStructurePointsPerFrame;
             this.lkWindowSize = lkWindowSize >= 5 ? lkWindowSize : 21;
             this.lkLevels = Math.Clamp(lkLevels, 0, 6);
             this.maxLkError = maxLkError > 0 ? maxLkError : DefaultMaxLkError;
@@ -264,6 +284,19 @@ namespace HySlam.Core.Slam
             Cv2.SetTheRNG(0x5EEDUL);
         }
 
+        /// <summary>
+        /// Applies an optional motion prior from a previous bake pass. Pass null to clear.
+        /// </summary>
+        public void ApplyPosePrior(IReadOnlyList<PosePriorStep>? prior)
+        {
+            posePrior = prior;
+
+            if (prior is null || prior.Count == 0)
+                return;
+
+            motionPredictor.Seed(prior[0].YawStep, prior[0].StepX, prior[0].StepZ);
+        }
+
         public bool ProcessFrame(Mat frame, out List<Point2f> keyframePoints, out List<Point2f> currentPoints)
         {
             keyframePoints = new List<Point2f>();
@@ -313,6 +346,7 @@ namespace HySlam.Core.Slam
                 ReplacePreviousFrame(previousPoints);
                 UpdatePoseFromState();
                 MaybeCreateKeyframe(structureMask);
+                LastMotionValid = true;
 
                 if (trace)
                     Log.Information("ProcessFrame #{Call}: first frame path done.", callIndex);
@@ -341,6 +375,18 @@ namespace HySlam.Core.Slam
             // a planar fit is a genuine motion estimate or an outlier.
             var (predYaw, predStepX, predStepZ) = motionPredictor.Forecast();
             bool hasForecast = motionPredictor.HasPrediction;
+
+            // A previous bake pass knows how the camera moved at this point of the clip.
+            // Use that as the forecast; the current fit still has to agree with it.
+            bool hasPrior = posePrior is not null && processedFrames < posePrior.Count;
+            if (hasPrior)
+            {
+                PosePriorStep priorStep = posePrior![processedFrames];
+                predYaw = priorStep.YawStep;
+                predStepX = priorStep.StepX;
+                predStepZ = priorStep.StepZ;
+                hasForecast = true;
+            }
 
             if (prevTracked.Count >= MinTrackedPoints)
             {
@@ -371,12 +417,26 @@ namespace HySlam.Core.Slam
 
             if (!motionValid && hasLastMotion && framesSinceMotion < MaxPredictedFrames)
             {
-                // No usable fit this frame. Fall back to the smoothed prediction so the
-                // trajectory does not freeze on high-speed or low-texture segments.
-                ApplySmoothedStep();
+                // No usable fit this frame. Fall back to the previous pass's step when one
+                // exists, otherwise to the smoothed prediction, so the trajectory does not
+                // freeze on high-speed or low-texture segments.
+                if (hasPrior)
+                {
+                    PosePriorStep priorStep = posePrior![processedFrames];
+                    ApplyMotion(priorStep.YawStep, priorStep.StepX, priorStep.StepZ);
+                    motionPredictor.Observe(
+                        priorStep.YawStep, priorStep.StepX, priorStep.StepZ, maxTranslationStep * 2.0);
+                }
+                else
+                {
+                    ApplySmoothedStep();
+                    motionPredictor.Observe(smoothedYawStep, smoothedStepX, smoothedStepZ, maxTranslationStep * 2.0);
+                }
+
                 framesSinceMotion++;
-                motionPredictor.Observe(smoothedYawStep, smoothedStepX, smoothedStepZ, maxTranslationStep * 2.0);
             }
+
+            LastMotionValid = motionValid;
 
             UpdatePoseFromState();
 
@@ -811,6 +871,8 @@ namespace HySlam.Core.Slam
 
         private void ApplyMotion(double yawStep, double tx, double tz)
         {
+            LastStep = new PosePriorStep(yawStep, tx, tz);
+
             if (!hasSmoothedMotion)
             {
                 smoothedYawStep = yawStep;
@@ -848,6 +910,7 @@ namespace HySlam.Core.Slam
 
         private void ApplySmoothedStep()
         {
+            LastStep = new PosePriorStep(smoothedYawStep, smoothedStepX, smoothedStepZ);
             heading += smoothedYawStep;
             centerX += smoothedStepX;
             centerZ += smoothedStepZ;
@@ -907,7 +970,14 @@ namespace HySlam.Core.Slam
                 float gly = (float)-wy;
                 float glz = (float)-wz;
 
-                if (spatialIndex.IsTooClose(map.Points, glx, gly, glz)) continue;
+                // Count repeated observations of the same road structure instead of
+                // silently dropping the duplicate. The cleanup bake pass uses the
+                // count to tell stable road points from one-off noise.
+                if (spatialIndex.TryFindNear(map.Points, glx, gly, glz, out int existing))
+                {
+                    map.Points[existing].Observations++;
+                    continue;
+                }
 
                 AddMapPoint(new MapPoint
                 {
@@ -993,7 +1063,7 @@ namespace HySlam.Core.Slam
                     for (int k = 0; k < 3; k++)
                         camera2In1[r] -= relativeRotation[k, r] * relativeTranslation[k];
 
-                int perKeyframeLimit = MaxStructurePointsPerFrame / maxStructureKeyframes;
+                int perKeyframeLimit = maxStructurePointsPerFrame / maxStructureKeyframes;
                 if (perKeyframeLimit < 1) perKeyframeLimit = 1;
 
                 int added = 0;
@@ -1046,7 +1116,14 @@ namespace HySlam.Core.Slam
                     float gly = (float)-wy;
                     float glz = (float)-wz;
 
-                    if (spatialIndex.IsTooClose(map.Points, glx, gly, glz)) continue;
+                    // The same structure seen again counts as another observation instead
+                    // of a duplicate point. The bake passes use this to confirm points
+                    // across keyframes and passes.
+                    if (spatialIndex.TryFindNear(map.Points, glx, gly, glz, out int existing))
+                    {
+                        map.Points[existing].Observations++;
+                        continue;
+                    }
 
                     AddMapPoint(new MapPoint
                     {

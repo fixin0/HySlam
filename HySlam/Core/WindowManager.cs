@@ -17,6 +17,7 @@ namespace HySlam.Core
     internal sealed class WindowManager : GameWindow
     {
         private readonly RunOptions options;
+        private readonly string videoPath;
 
         private readonly MapData map = new();
 
@@ -57,6 +58,8 @@ namespace HySlam.Core
                 })
         {
             this.options = options;
+            videoPath = options.VideoPath
+                ?? throw new InvalidOperationException("The interactive viewer requires a video path.");
         }
 
         private static GameWindowSettings CreateGameWindowSettings()
@@ -88,7 +91,7 @@ namespace HySlam.Core
                 InitializeRenderer();
                 InitializeSLAM();
 
-                Log.Information("HySlam initialized -> {VideoPath}", options.VideoPath);
+                Log.Information("HySlam initialized -> {VideoPath}", videoPath);
                 Log.Information("OnLoad: end.");
             }
             catch (Exception ex)
@@ -113,7 +116,7 @@ namespace HySlam.Core
         private void InitializeSLAM()
         {
             Log.Information("InitializeSLAM: opening video capture.");
-            capture = new CameraFeedWindow(options.VideoPath);
+            capture = new CameraFeedWindow(videoPath);
 
             Log.Information(
                 "InitializeSLAM: video {Width}x{Height} @ {Fps:0.##} fps.",
@@ -312,7 +315,7 @@ namespace HySlam.Core
             recorder?.Finish(
                 map.Points,
                 map.Trajectory,
-                options.VideoPath,
+                videoPath,
                 framesRead,
                 framesProcessed,
                 options.MaxFrames,
