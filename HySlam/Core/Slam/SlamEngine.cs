@@ -76,6 +76,11 @@ namespace HySlam.Core.Slam
         private double groundHeight = 1.3;
         private double normalX, normalY = 1.0, normalZ;
 
+        // Camera pitch in radians. Positive means the optical axis points down.
+        // The pitch starts from the horizon-derived value in Initialize but can
+        // evolve as the camera tilts during motion (step 3 of environment mapping).
+        private double pitchRadians;
+
         // Scene-dependent depth window and detection band. The road defaults keep the
         // previous behaviour; an indoor scene overrides them through the CLI preset.
         private double minGroundDepth = 6.0;
@@ -252,6 +257,10 @@ namespace HySlam.Core.Slam
                 double horizonRow = height * DefaultGroundHorizonFraction;
                 pitchRadians = -Math.Atan((horizonRow - cy) / fy);
             }
+
+            // Store the evolving pitch state; it starts from the horizon-derived
+            // value but can be adjusted as the camera tilts during motion.
+            this.pitchRadians = pitchRadians;
 
             normalX = 0.0;
             normalY = Math.Cos(pitchRadians);
@@ -921,20 +930,37 @@ namespace HySlam.Core.Slam
             double c = Math.Cos(heading);
             double s = Math.Sin(heading);
 
+            // Recompute the ground normal from the current (evolving) pitch so the
+            // pose stays consistent when the camera tilts during motion.
+            double ny = Math.Cos(pitchRadians);
+            double nz = Math.Sin(pitchRadians);
+
             // The pose maps actual camera coordinates to the world. The camera is
             // mounted with a small pitch relative to the road, so its orientation is
             // R_y(heading) * R_cameraToLevel, where R_cameraToLevel uses the ground
-            // normal (normalY, normalZ) established in Initialize. Keeping the pitch in
-            // the pose is what makes keyframe triangulation and the ground projection
-            // agree; without it structure points pick up a systematic depth error.
+            // normal (normalY, normalZ). Keeping the pitch in the pose is what makes
+            // keyframe triangulation and the ground projection agree; without it
+            // structure points pick up a systematic depth error.
             currentPose.Rotation = new double[,]
             {
-                { c, -s * normalZ, s * normalY },
-                { 0, normalY, normalZ },
-                { -s, -c * normalZ, c * normalY }
+                { c, -s * nz, s * ny },
+                { 0, ny, nz },
+                { -s, -c * nz, c * ny }
             };
 
             currentPose.Translation = new[] { centerX, -groundHeight, centerZ };
+        }
+
+        /// <summary>
+        /// Adjusts the camera pitch by a small delta (radians). Used when the
+        /// motion fit or structure triangulation indicates the camera has tilted.
+        /// The value is clamped to avoid degenerate ground normals.
+        /// </summary>
+        public void AdjustPitch(double deltaRadians)
+        {
+            const double maxPitch = Math.PI / 3.0; // +/- 60 degrees
+            pitchRadians = Math.Clamp(pitchRadians + deltaRadians, -maxPitch, maxPitch);
+            UpdatePoseFromState();
         }
 
         // ---------------------------------------------------------------------

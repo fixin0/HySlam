@@ -52,5 +52,52 @@ namespace HySlam.Core.Slam
             Rotation = newR;
             Translation = newT;
         }
+
+        /// <summary>
+        /// Extracts the camera pitch (rotation around the camera X axis) from the
+        /// rotation matrix. Positive pitch means the optical axis points down.
+        /// Returns the angle in radians.
+        /// </summary>
+        public double ExtractPitchRadians()
+        {
+            // The rotation maps camera coordinates to world coordinates.
+            // The camera's forward direction in world space is the third column
+            // (or row, depending on convention) of the rotation matrix. Pitch is
+            // derived from how much that forward vector tilts away from horizontal.
+            var fwdZ = new GLVector3((float)Rotation[0, 2], (float)Rotation[1, 2], (float)Rotation[2, 2]);
+            var horizontal = Math.Sqrt(fwdZ.X * fwdZ.X + fwdZ.Z * fwdZ.Z);
+            if (horizontal < 1e-6) return 0.0;
+            return Math.Atan2(fwdZ.Y, horizontal);
+        }
+
+        /// <summary>
+        /// Extracts the camera roll (rotation around the camera Z axis / forward
+        /// direction) from the rotation matrix. Returns the angle in radians.
+        /// </summary>
+        public double ExtractRollRadians()
+        {
+            // Roll is approximated from the rotation of the camera's up vector
+            // around the forward axis.
+            var up = new GLVector3((float)-Rotation[0, 1], (float)Rotation[1, 1], (float)-Rotation[2, 1]);
+            var fwd = new GLVector3((float)Rotation[0, 2], (float)Rotation[1, 2], (float)Rotation[2, 2]);
+            var right = GLVector3.Cross(fwd, up);
+            if (right.LengthSquared < 1e-6) return 0.0;
+            right = GLVector3.Normalize(right);
+            var worldUp = GLVector3.UnitY;
+            double dot = Math.Clamp(GLVector3.Dot(right, worldUp), -1.0, 1.0);
+            return Math.Acos(dot);
+        }
+
+        /// <summary>
+        /// Extracts the camera heading (yaw around the world Y axis) from the
+        /// rotation matrix. Returns the angle in radians.
+        /// </summary>
+        public double ExtractYawRadians()
+        {
+            // Heading is the rotation of the camera forward vector around the
+            // world Y axis. The forward vector's X and Z components give the yaw.
+            var fwd = new GLVector3((float)Rotation[0, 2], (float)Rotation[1, 2], (float)Rotation[2, 2]);
+            return Math.Atan2(fwd.X, fwd.Z);
+        }
     }
 }
