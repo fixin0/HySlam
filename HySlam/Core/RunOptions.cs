@@ -61,59 +61,54 @@ namespace HySlam.Core
 
         /// <summary>
         /// Near limit (meters) of the ground-plane depth window used by the planar
-        /// odometry. The road preset uses 6 m; an indoor room needs roughly 1.5 m.
+        /// odometry. Defaults are tuned for motorway footage.
         /// </summary>
-        public double MinGroundDepth { get; init; } = 6.0;
+        public double MinGroundDepth { get; init; } = 10.0;
 
         /// <summary>
         /// Far limit (meters) of the ground-plane depth window. Beyond this the metric
         /// error of a pixel grows quadratically, so the fit is restricted to the near
-        /// field. The road preset uses 26 m; an indoor room needs roughly 7 m.
+        /// field. Defaults are tuned for motorway footage.
         /// </summary>
-        public double MaxGroundDepth { get; init; } = 26.0;
+        public double MaxGroundDepth { get; init; } = 55.0;
 
         /// <summary>
         /// Maximum camera depth (meters) for triangulated above-ground structure.
-        /// The road preset uses 45 m; an indoor room needs roughly 12 m.
+        /// Defaults are tuned for motorway footage.
         /// </summary>
-        public double MaxStructureDepth { get; init; } = 45.0;
+        public double MaxStructureDepth { get; init; } = 120.0;
 
         /// <summary>
         /// Top of the image band used for ground-plane odometry, as a fraction of the
         /// frame height. The band must contain the ground surface only.
         /// </summary>
-        public double GroundBandTop { get; init; } = 0.70;
+        public double GroundBandTop { get; init; } = 0.68;
 
         /// <summary>
         /// Bottom of the ground-plane odometry band, as a fraction of the frame height.
         /// </summary>
-        public double GroundBandBottom { get; init; } = 0.99;
+        public double GroundBandBottom { get; init; } = 0.86;
 
         /// <summary>
-        /// Maximum number of processed frames a keyframe stays active. Structure
-        /// triangulation needs a small baseline, so an indoor scene uses a much
-        /// shorter interval than the road preset.
+        /// Maximum number of processed frames a keyframe stays active. The motorway
+        /// default keeps a short interval so structure has enough baseline.
         /// </summary>
-        public int KeyframeFrames { get; init; } = 30;
+        public int KeyframeFrames { get; init; } = 12;
 
         /// <summary>
-        /// Maximum camera translation (meters) accepted for one processed frame. A
-        /// hand-held indoor clip needs a much tighter limit than a road clip, because
-        /// a tilt during a pan can otherwise be fitted as a spontaneous jump.
+        /// Maximum camera translation (meters) accepted for one processed frame.
+        /// Defaults are tuned for motorway footage.
         /// </summary>
-        public double MaxTranslationStep { get; init; } = 3.0;
-
-        /// <summary>Name of the scene preset that produced the effective values.</summary>
-        public string ScenePreset { get; init; } = "road";
+        public double MaxTranslationStep { get; init; } = 10.0;
 
         /// <summary>Lucas-Kanade window size in pixels (odd).</summary>
-        public int LkWindowSize { get; init; } = 21;
+        public int LkWindowSize { get; init; } = 27;
 
         /// <summary>Lucas-Kanade pyramid levels.</summary>
-        public int LkLevels { get; init; } = 3;
+        public int LkLevels { get; init; } = 4;
 
         /// <summary>Maximum LK per-point error accepted as a valid match.</summary>
-        public double LkError { get; init; } = 20.0;
+        public double LkError { get; init; } = 30.0;
 
         /// <summary>
         /// Enables loop closure detection and drift correction. Disabled by default:

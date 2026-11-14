@@ -19,7 +19,7 @@ namespace HySlam.Core.Bake
     /// </summary>
     internal sealed class BakeRunner
     {
-        // Same sampling as the interactive viewer so presets stay valid.
+        // Same sampling as the interactive viewer so the defaults stay valid.
         private const int FrameSkip = 3;
 
         private const double MinConfirmedFraction = 0.30;
@@ -348,7 +348,7 @@ namespace HySlam.Core.Bake
 
         /// <summary>
         /// Widens tracking when the baseline lost too many frames. The pass keeps the
-        /// preset's scene geometry; it only changes motion-tracking parameters.
+        /// highway scene geometry; it only changes motion-tracking parameters.
         /// </summary>
         private static BakePassSettings Adapt(BakePassSettings baseSettings, BakePassResult baseline)
         {
@@ -540,7 +540,6 @@ namespace HySlam.Core.Bake
             using var writer = NewWriter("summary.txt");
 
             writer.WriteLine($"video={videoPath}");
-            writer.WriteLine($"preset={options.ScenePreset}");
             writer.WriteLine("bake=true");
             writer.WriteLine($"bake_passes={bake.Passes}");
             writer.WriteLine($"bake_max_keyframes={bake.MaxKeyframes}");

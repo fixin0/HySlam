@@ -25,7 +25,7 @@ namespace HySlam.Core.Slam
         private const int MinTrackedPoints = 40;
         private const int MinInliers = 20;
         private const double MinInlierRatio = 0.40;
-        private const double DefaultMaxLkError = 20.0;
+        private const double DefaultMaxLkError = 30.0;
         private const double ForwardBackwardErrorPx = 1.0;
 
         // === Ground-plane odometry ===
@@ -38,7 +38,7 @@ namespace HySlam.Core.Slam
         private const int RansacIterations = 400;
         private const double MaxGroundResidual = 0.35;  // meters
         private const double MaxYawStepDegrees = 8.0;
-        private const double DefaultMaxTranslationStep = 3.0;  // meters per processed frame
+        private const double DefaultMaxTranslationStep = 10.0;  // meters per processed frame
         private const double YawSmoothing = 0.20;
         private const double TranslationSmoothing = 0.30;
         private const int MaxPredictedFrames = 2;
@@ -49,7 +49,7 @@ namespace HySlam.Core.Slam
         private const double MaxReprojErrPx = 2.0;
         private const double MinParallaxDeg = 0.3;
         private const double MinStructureHeight = 0.4;  // meters above the road
-        private const int DefaultMaxFramesPerKeyframe = 30;
+        private const int DefaultMaxFramesPerKeyframe = 12;
         private const int MaxRoadPointsPerFrame = 160;
         private const int DefaultMaxStructurePointsPerFrame = 220;
         private const int MaxMapPoints = 150000;
@@ -88,13 +88,13 @@ namespace HySlam.Core.Slam
         // evolve as the camera tilts during motion (step 3 of environment mapping).
         private double pitchRadians;
 
-        // Scene-dependent depth window and detection band. The road defaults keep the
-        // previous behaviour; an indoor scene overrides them through the CLI preset.
-        private double minGroundDepth = 6.0;
-        private double maxGroundDepth = 26.0;
-        private double maxStructureDepth = 45.0;
-        private double groundBandTop = 0.70;
-        private double groundBandBottom = 0.99;
+        // Depth window and detection band tuned for motorway footage. Explicit CLI
+        // options can override every value.
+        private double minGroundDepth = 10.0;
+        private double maxGroundDepth = 55.0;
+        private double maxStructureDepth = 120.0;
+        private double groundBandTop = 0.68;
+        private double groundBandBottom = 0.86;
         private int maxFramesPerKeyframe = DefaultMaxFramesPerKeyframe;
         private double maxTranslationStep = DefaultMaxTranslationStep;
         private int maxStructureKeyframes = MaxStructureKeyframes;
@@ -108,8 +108,8 @@ namespace HySlam.Core.Slam
         // Lucas-Kanade parameters. A high-speed clip needs a wider window and one
         // more pyramid level, otherwise the per-frame displacement exceeds the
         // search range and every match is rejected.
-        private int lkWindowSize = 21;
-        private int lkLevels = 3;
+        private int lkWindowSize = 27;
+        private int lkLevels = 4;
         private double maxLkError = DefaultMaxLkError;
 
         // === Frame-to-frame tracking state ===
@@ -135,6 +135,7 @@ namespace HySlam.Core.Slam
         private double centerX, centerZ;
         private double smoothedYawStep;
         private double smoothedStepX, smoothedStepZ;
+        private double smoothedCurvature;
         private bool hasSmoothedMotion;
 
         private bool hasLastMotion;
@@ -190,15 +191,15 @@ namespace HySlam.Core.Slam
             double cameraHeight = 1.3,
             double? pitchDegrees = null,
             double horizontalFovDegrees = 0.0,
-            double minGroundDepth = 6.0,
-            double maxGroundDepth = 26.0,
-            double maxStructureDepth = 45.0,
-            double groundBandTop = 0.70,
-            double groundBandBottom = 0.99,
+            double minGroundDepth = 10.0,
+            double maxGroundDepth = 55.0,
+            double maxStructureDepth = 120.0,
+            double groundBandTop = 0.68,
+            double groundBandBottom = 0.86,
             int maxFramesPerKeyframe = DefaultMaxFramesPerKeyframe,
             double maxTranslationStep = DefaultMaxTranslationStep,
-            int lkWindowSize = 21,
-            int lkLevels = 3,
+            int lkWindowSize = 27,
+            int lkLevels = 4,
             double maxLkError = DefaultMaxLkError,
             int maxStructureKeyframes = MaxStructureKeyframes,
             int maxStructurePointsPerFrame = DefaultMaxStructurePointsPerFrame)
@@ -239,9 +240,9 @@ namespace HySlam.Core.Slam
 
             groundHeight = cameraHeight > 0 ? cameraHeight : 1.3;
 
-            this.minGroundDepth = minGroundDepth > 0 ? minGroundDepth : 6.0;
+            this.minGroundDepth = minGroundDepth > 0 ? minGroundDepth : 10.0;
             this.maxGroundDepth = maxGroundDepth > this.minGroundDepth ? maxGroundDepth : this.minGroundDepth + 1.0;
-            this.maxStructureDepth = maxStructureDepth > 0 ? maxStructureDepth : 45.0;
+            this.maxStructureDepth = maxStructureDepth > 0 ? maxStructureDepth : 120.0;
             this.groundBandTop = Math.Clamp(groundBandTop, 0.0, 0.94);
             this.groundBandBottom = Math.Clamp(groundBandBottom, this.groundBandTop + 0.05, 1.0);
             this.maxFramesPerKeyframe = maxFramesPerKeyframe > 0 ? maxFramesPerKeyframe : DefaultMaxFramesPerKeyframe;
@@ -250,7 +251,7 @@ namespace HySlam.Core.Slam
             this.maxStructurePointsPerFrame = maxStructurePointsPerFrame > 0
                 ? maxStructurePointsPerFrame
                 : DefaultMaxStructurePointsPerFrame;
-            this.lkWindowSize = lkWindowSize >= 5 ? lkWindowSize : 21;
+            this.lkWindowSize = lkWindowSize >= 5 ? lkWindowSize : 27;
             this.lkLevels = Math.Clamp(lkLevels, 0, 6);
             this.maxLkError = maxLkError > 0 ? maxLkError : DefaultMaxLkError;
 
@@ -287,6 +288,7 @@ namespace HySlam.Core.Slam
             smoothedYawStep = 0.0;
             smoothedStepX = 0.0;
             smoothedStepZ = 0.0;
+            smoothedCurvature = 0.0;
             hasSmoothedMotion = false;
             hasLastMotion = false;
             framesSinceMotion = 0;
@@ -969,6 +971,16 @@ namespace HySlam.Core.Slam
                 smoothedYawStep += YawSmoothing * (yawStep - smoothedYawStep);
             }
 
+            // Curvature in radians per meter, used to bend the projected lane
+            // overlay through gentle bends. Clamp it to a radius of at least 5 m.
+            double stepDistance = Math.Sqrt(tx * tx + tz * tz);
+            if (stepDistance > 0.05)
+            {
+                double curvature = smoothedYawStep / stepDistance;
+                curvature = Math.Clamp(curvature, -0.2, 0.2);
+                smoothedCurvature += 0.25 * (curvature - smoothedCurvature);
+            }
+
             double nextHeading = heading + smoothedYawStep;
             double c = Math.Cos(nextHeading);
             double s = Math.Sin(nextHeading);
@@ -1289,35 +1301,45 @@ namespace HySlam.Core.Slam
             if (frame.Empty() || frame.Channels() < 3)
                 return;
 
-            double c = Math.Cos(heading);
-            double s = Math.Sin(heading);
             double halfWidth = laneWidthMeters * 0.5;
 
             var left = new List<Point>();
             var right = new List<Point>();
             var centre = new List<Point>();
 
+            // Integrate a constant-curvature arc ahead of the camera. This makes the
+            // projected corridor bend through gentle motorway curves instead of
+            // staying on the initial heading.
             const double step = 1.0;
-            for (double d = nearMeters; d <= farMeters; d += step)
+            double h = heading;
+            double x = centerX;
+            double z = centerZ;
+            double curvature = smoothedCurvature;
+
+            for (double d = 0.0; d <= farMeters; d += step)
             {
-                // Ground-plane point ahead of the camera in world coordinates.
-                double wx = centerX + s * d;
-                double wz = centerZ + c * d;
+                // Local right vector on the ground plane.
+                double rx = Math.Cos(h);
+                double rz = -Math.Sin(h);
 
-                // Camera-right vector projected onto the ground plane.
-                double rx = c;
-                double rz = -s;
+                var leftPoint = ProjectGroundPoint(x - rx * halfWidth, z - rz * halfWidth);
+                var rightPoint = ProjectGroundPoint(x + rx * halfWidth, z + rz * halfWidth);
+                var centrePoint = ProjectGroundPoint(x, z);
 
-                var leftPoint = ProjectGroundPoint(wx - rx * halfWidth, wz - rz * halfWidth);
-                var rightPoint = ProjectGroundPoint(wx + rx * halfWidth, wz + rz * halfWidth);
-                var centrePoint = ProjectGroundPoint(wx, wz);
+                if (d >= nearMeters &&
+                    leftPoint is not null &&
+                    rightPoint is not null &&
+                    centrePoint is not null)
+                {
+                    left.Add(leftPoint.Value);
+                    right.Add(rightPoint.Value);
+                    centre.Add(centrePoint.Value);
+                }
 
-                if (leftPoint is null || rightPoint is null || centrePoint is null)
-                    break; // behind the camera or outside the frame
-
-                left.Add(leftPoint.Value);
-                right.Add(rightPoint.Value);
-                centre.Add(centrePoint.Value);
+                // Advance along the arc.
+                h += curvature * step;
+                x += Math.Sin(h) * step;
+                z += Math.Cos(h) * step;
             }
 
             if (centre.Count < 2)
@@ -1342,9 +1364,10 @@ namespace HySlam.Core.Slam
             Cv2.Polylines(frame, new[] { right.ToArray() }, false, darkGreen, 2);
             Cv2.Polylines(frame, new[] { centre.ToArray() }, false, green, 3);
 
+            var labelAnchor = centre[Math.Min(centre.Count - 1, centre.Count / 3)];
             var labelOrigin = new Point(
-                Math.Clamp(centre[0].X - 60, 4, frame.Cols - 140),
-                Math.Max(20, centre[0].Y - 20));
+                Math.Clamp(labelAnchor.X - 60, 4, frame.Cols - 140),
+                Math.Max(20, labelAnchor.Y - 20));
             Cv2.PutText(
                 frame,
                 "ACTIVE LANE",

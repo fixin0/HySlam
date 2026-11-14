@@ -167,9 +167,8 @@ namespace HySlam.Core
             frameIndex = FrameSkip - 1;
             Log.Information("SLAM initialized.");
             Log.Information(
-                "Preset '{Preset}': depth {MinDepth:0.#}-{MaxDepth:0.#} m, band {BandTop:0.00}-{BandBottom:0.00}, " +
+                "Highway defaults: depth {MinDepth:0.#}-{MaxDepth:0.#} m, band {BandTop:0.00}-{BandBottom:0.00}, " +
                 "keyframe {Keyframes} frames, max step {MaxStep:0.#} m, LK window {Window}, levels {Levels}.",
-                options.ScenePreset,
                 options.MinGroundDepth,
                 options.MaxGroundDepth,
                 options.GroundBandTop,

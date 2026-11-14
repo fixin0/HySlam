@@ -19,63 +19,6 @@ namespace HySlam
             Error
         }
 
-        /// <summary>
-        /// One row of the scene preset table. A preset only changes numbers that are
-        /// scene dependent; explicit CLI options always win over the preset values.
-        /// </summary>
-        private readonly record struct SceneSettings(
-            string Name,
-            double MinDepth,
-            double MaxDepth,
-            double StructureDepth,
-            double BandTop,
-            double BandBottom,
-            int KeyframeFrames,
-            double MaxStep,
-            double? PitchDegrees,
-            int LkWindow,
-            int LkLevels,
-            double LkError,
-            string Description);
-
-        // The road preset keeps the original dashcam tuning, so existing runs stay
-        // byte-identical. The others differ only in the numbers that actually change
-        // between scenes: how far the ground plane is usable, which image band holds
-        // the ground, how much baseline a keyframe may accumulate and how fast a
-        // single frame is allowed to move.
-        private static readonly Dictionary<string, SceneSettings> Presets = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["road"] = new("road", 6.0, 26.0, 45.0, 0.70, 0.99, 30, 3.0, null, 21, 3, 20.0,
-                "dashcam on a normal road, rigid mount"),
-            ["highway"] = new("highway", 10.0, 55.0, 120.0, 0.68, 0.86, 12, 10.0, null, 27, 4, 30.0,
-                "motorway at cruise speed: far field, large steps"),
-            ["fast"] = new("fast", 12.0, 70.0, 120.0, 0.65, 0.82, 6, 15.0, null, 31, 4, 35.0,
-                "very high speed / low frame rate: wider LK search, capped step"),
-            ["mountain"] = new("mountain", 5.0, 30.0, 70.0, 0.70, 0.99, 25, 4.0, null, 21, 3, 25.0,
-                "winding mountain road, trees and rock, no lane markings"),
-            ["city"] = new("city", 3.0, 18.0, 40.0, 0.72, 0.98, 10, 3.0, null, 21, 3, 20.0,
-                "dense urban street: tighter step, more keyframes, wider band"),
-            ["office"] = new("office", 1.5, 9.0, 18.0, 0.72, 0.96, 8, 0.8, 5.0, 21, 3, 20.0,
-                "office room, hand-held, desk height"),
-            ["home"] = new("home", 1.2, 7.0, 12.0, 0.78, 0.97, 8, 0.6, 5.0, 21, 3, 20.0,
-                "home / narrow room, hand-held walking")
-        };
-
-        // Accepted English aliases.
-        private static readonly Dictionary<string, string> PresetAliases = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["indoor"] = "home",
-            ["house"] = "home",
-            ["room"] = "home",
-            ["motorway"] = "highway",
-            ["expressway"] = "highway",
-            ["high-speed"] = "fast",
-            ["highspeed"] = "fast",
-            ["speed"] = "fast",
-            ["urban"] = "city",
-            ["mountain-road"] = "mountain"
-        };
-
         private static int Main(string[] args)
         {
             // Configure Serilog before parsing so argument errors are logged through
@@ -194,17 +137,16 @@ namespace HySlam
             double cameraHeight = 1.3;
             double? pitchDegrees = null;
             double horizontalFovDegrees = 0.0;
-            double? minGroundDepth = null;
-            double? maxGroundDepth = null;
-            double? maxStructureDepth = null;
-            double? groundBandTop = null;
-            double? groundBandBottom = null;
-            int? keyframeFrames = null;
-            double? maxTranslationStep = null;
-            int? lkWindow = null;
-            int? lkLevels = null;
-            double? lkError = null;
-            string scenePreset = "road";
+            double minGroundDepth = 10.0;
+            double maxGroundDepth = 55.0;
+            double maxStructureDepth = 120.0;
+            double groundBandTop = 0.68;
+            double groundBandBottom = 0.86;
+            int keyframeFrames = 12;
+            double maxTranslationStep = 10.0;
+            int lkWindow = 27;
+            int lkLevels = 4;
+            double lkError = 30.0;
             bool loopClosure = false;
             RenderColorMode colorMode = RenderColorMode.Height;
             RenderTheme theme = RenderTheme.Dark;
@@ -377,13 +319,6 @@ namespace HySlam
                                 return ParseResult.Error;
                             }
 
-                            break;
-
-                        case "--preset":
-                            if (!TryReadValue(args, ref i, inlineValue, name, out string? presetValue))
-                                return ParseResult.Error;
-
-                            scenePreset = presetValue.ToLowerInvariant();
                             break;
 
                         case "--min-depth":
@@ -599,33 +534,16 @@ namespace HySlam
                 return ParseResult.Error;
             }
 
-            // Resolve the preset name (including aliases) and apply its values only to
-            // options that were not set explicitly on the command line.
-            string presetKey = PresetAliases.TryGetValue(scenePreset, out string? alias) ? alias : scenePreset;
-            if (!Presets.TryGetValue(presetKey, out SceneSettings scene))
-            {
-                Log.Error(
-                    "Error: unknown preset '{Preset}'. Available: {AvailablePresets}.",
-                    scenePreset,
-                    string.Join(", ", Presets.Keys));
-                return ParseResult.Error;
-            }
-
-            // An indoor camera is normally tilted down towards the floor; the dashcam
-            // horizon (0.665 of the frame) would be far below the real horizon here.
-            if (scene.PitchDegrees.HasValue)
-                pitchDegrees ??= scene.PitchDegrees.Value;
-
-            double effectiveMinDepth = minGroundDepth ?? scene.MinDepth;
-            double effectiveMaxDepth = maxGroundDepth ?? scene.MaxDepth;
-            double effectiveStructureDepth = maxStructureDepth ?? scene.StructureDepth;
-            double effectiveBandTop = groundBandTop ?? scene.BandTop;
-            double effectiveBandBottom = groundBandBottom ?? scene.BandBottom;
-            int effectiveKeyframeFrames = keyframeFrames ?? scene.KeyframeFrames;
-            double effectiveMaxStep = maxTranslationStep ?? scene.MaxStep;
-            int effectiveLkWindow = lkWindow ?? scene.LkWindow;
-            int effectiveLkLevels = lkLevels ?? scene.LkLevels;
-            double effectiveLkError = lkError ?? scene.LkError;
+            double effectiveMinDepth = minGroundDepth;
+            double effectiveMaxDepth = maxGroundDepth;
+            double effectiveStructureDepth = maxStructureDepth;
+            double effectiveBandTop = groundBandTop;
+            double effectiveBandBottom = groundBandBottom;
+            int effectiveKeyframeFrames = keyframeFrames;
+            double effectiveMaxStep = maxTranslationStep;
+            int effectiveLkWindow = lkWindow;
+            int effectiveLkLevels = lkLevels;
+            double effectiveLkError = lkError;
 
             if (effectiveMaxDepth <= effectiveMinDepth)
             {
@@ -724,7 +642,6 @@ namespace HySlam
                 GroundBandBottom = effectiveBandBottom,
                 KeyframeFrames = effectiveKeyframeFrames,
                 MaxTranslationStep = effectiveMaxStep,
-                ScenePreset = scene.Name,
                 LkWindowSize = effectiveLkWindow,
                 LkLevels = effectiveLkLevels,
                 LkError = effectiveLkError,

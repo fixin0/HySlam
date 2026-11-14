@@ -48,14 +48,14 @@ For a short, repeatable run without wall-clock pacing:
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road.mp4 `
-  --preset:road --max-frames 120 --deterministic
+  --max-frames 120 --deterministic
 ```
 
 For a headless multi-pass export of the whole clip:
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road.mp4 `
-  --preset:road --bake --bake-passes 5
+  --bake --bake-passes 5
 ```
 
 To inspect or validate an existing export without the video:
@@ -169,33 +169,33 @@ dotnet run --project HySlam\HySlam.csproj -- --help
 
 # Run from source with a local clip
 dotnet run --project HySlam\HySlam.csproj -- `
-  --source:video --path C:\clips\road.mp4 --preset:road --camera-height 1.3
+  --source:video --path C:\clips\road.mp4 --camera-height 1.3
 
 # Run the built executable directly
 .\HySlam\bin\Debug\net10.0\HySlam.exe `
-  --source:video --path C:\clips\road.mp4 --preset:road --camera-height 1.3
+  --source:video --path C:\clips\road.mp4 --camera-height 1.3
 
 # Build and run a Release build
 dotnet build HySlam.slnx -c Release
 .\HySlam\bin\Release\net10.0\HySlam.exe `
-  --source:video --path C:\clips\highway.mp4 --preset:highway --camera-height 1.3
+  --source:video --path C:\clips\highway.mp4 --camera-height 1.3
 
 # Write a deterministic dump for inspection
 dotnet run --project HySlam\HySlam.csproj -- `
   --source:video --path C:\clips\short.mp4 `
-  --preset:road --deterministic --max-frames 300 --dump C:\runs\baseline
+  --deterministic --max-frames 300 --dump C:\runs\baseline
 
-# Use a real calibration file and override one preset value
+# Use a real calibration file and override one default value
 dotnet run --project HySlam\HySlam.csproj -- `
   --source:video --path C:\clips\road.mp4 --calib C:\clips\camera.txt `
-  --preset:road --camera-height 1.25 --band-top 0.72
+  --camera-height 1.25 --band-top 0.72
 ```
 
 Quote paths that contain spaces:
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- `
-  --source:video --path "C:\My Clips\road test.mp4" --preset:road
+  --source:video --path "C:\My Clips\road test.mp4"
 ```
 
 The dump directory is created automatically when it does not exist. The process
@@ -222,7 +222,7 @@ HySlam.exe --help
 
 Every option that takes a value accepts all three forms: `--path C:\clips\road.mp4`,
 `--path:C:\clips\road.mp4` and `--path=C:\clips\road.mp4`. `--deterministic` is a flag and
-rejects a value. Option names are case-sensitive; preset names are not.
+rejects a value. Option names are case-sensitive.
 
 | Option | Value | Default | Accepted range | Effect |
 | --- | --- | --- | --- | --- |
@@ -240,19 +240,18 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | `--grid` | flag | off | no value | Show the ground grid and height axis. Hidden by default for a clean point-cloud view |
 | `--no-video` | flag | off | no value | Do not open the source-video window with the active-lane overlay |
 | `--camera-height` | meters | `1.3` | `> 0` | Camera height above the road. Sets the metric scale of the whole trajectory |
-| `--pitch` | degrees | horizon-derived | `-45 .. 45` | Camera tilt; positive looks down. Indoor presets default to `5` when the option is omitted |
+| `--pitch` | degrees | horizon-derived | `-45 .. 45` | Camera tilt; positive looks down. Indoor clips can use `--pitch 5` |
 | `--fov` | degrees | fallback `fx = fy = 1.1 * width` | `> 0` and `< 180` | Horizontal FOV for the fallback intrinsics. Omit it to keep the width-based fallback; a value of `0` is rejected |
-| `--preset` | name | `road` | `road`, `highway`, `fast`, `mountain`, `city`, `office`, `home` plus aliases | Applies a scene tuning table; see [Scene presets](#scene-presets) |
-| `--min-depth` | meters | preset (road `6`) | `> 0` and `< --max-depth` | Near limit of the ground-plane depth window |
-| `--max-depth` | meters | preset (road `26`) | `> 0` and `> --min-depth` | Far limit of the ground-plane depth window |
-| `--structure-depth` | meters | preset (road `45`) | `> 0` | Maximum camera depth for triangulated above-road structure |
-| `--band-top` | fraction | preset (road `0.70`) | `0 .. 1` | Top of the road detection band as a fraction of frame height |
-| `--band-bottom` | fraction | preset (road `0.99`) | `0 .. 1` | Bottom of the road detection band. Requires `bottom - top >= 0.05` |
-| `--keyframe-frames` | integer | preset (road `30`) | `>= 1` | Maximum processed frames a keyframe stays active before it is replaced |
-| `--max-step` | meters | preset (road `3.0`) | `> 0` | Maximum camera translation accepted for one processed frame |
-| `--lk-window` | pixels | preset (road `21`) | odd, `5 .. 61` | Lucas-Kanade search window size |
-| `--lk-levels` | integer | preset (road `3`) | `0 .. 6` | Lucas-Kanade pyramid levels |
-| `--lk-error` | pixels | preset (road `20`) | `> 0` | Maximum per-point LK error for a match to count |
+| `--min-depth` | meters | `10` | `> 0` and `< --max-depth` | Near limit of the ground-plane depth window |
+| `--max-depth` | meters | `55` | `> 0` and `> --min-depth` | Far limit of the ground-plane depth window |
+| `--structure-depth` | meters | `120` | `> 0` | Maximum camera depth for triangulated above-road structure |
+| `--band-top` | fraction | `0.68` | `0 .. 1` | Top of the road detection band as a fraction of frame height |
+| `--band-bottom` | fraction | `0.86` | `0 .. 1` | Bottom of the road detection band. Requires `bottom - top >= 0.05` |
+| `--keyframe-frames` | integer | `12` | `>= 1` | Maximum processed frames a keyframe stays active before it is replaced |
+| `--max-step` | meters | `10` | `> 0` | Maximum camera translation accepted for one processed frame |
+| `--lk-window` | pixels | `27` | odd, `5 .. 61` | Lucas-Kanade search window size |
+| `--lk-levels` | integer | `4` | `0 .. 6` | Lucas-Kanade pyramid levels |
+| `--lk-error` | pixels | `30` | `> 0` | Maximum per-point LK error for a match to count |
 | `--bake` | flag | off | no value | Run headless and process the whole clip in multiple passes. Implies `--deterministic` and replaces `--dump` |
 | `--bake-passes` | integer | `5` | `1 .. 10` | Number of passes. `1` is a plain baseline; `5` is the recommended full bake |
 | `--bake-output` | directory | `runs/bake_<timestamp>` | any writable path | Directory for the selected pass's CSV files and reports |
@@ -264,10 +263,9 @@ The three `--bake-*` options require `--bake`. A bake writes only to
 mutually exclusive and cannot be combined with `--bake`; `--path` and `--dump`
 are ignored in read-back mode.
 
-Bounds are validated after the preset and the explicit options are merged, not while each
-argument is read. For example `--preset:city --min-depth 25 --max-depth 26` succeeds because
-the resulting window is valid, while `--preset:city --min-depth 25` fails because the preset
-`--max-depth 20` is then smaller than the explicit minimum.
+Bounds are validated after all options are parsed, not while each argument is read. For
+example `--min-depth 25 --max-depth 26` succeeds because the resulting window is valid,
+while `--min-depth 60` fails because it is larger than the default `--max-depth 55`.
 
 When the video ends (or `--max-frames` is reached), the window stays open so the map can be
 inspected and the dump is finalized. The process exits with code `0` on success or after
@@ -276,17 +274,15 @@ inspected and the dump is finalized. The process exits with code `0` on success 
 
 ### Settings and precedence
 
-A setting is resolved in three layers:
+A setting is resolved in two layers:
 
-1. **Built-in default** - `--camera-height 1.3`, fallback intrinsics, no dump, unlimited frames.
-2. **Preset** - `--preset` fills only the scene-dependent values listed in
-   [Scene presets](#scene-presets).
-3. **Explicit option** - any option passed on the command line wins, regardless of where it
-   appears relative to `--preset`.
+1. **Built-in default** - motorway-tuned depth, band, keyframe, step and LK values,
+   `--camera-height 1.3`, fallback intrinsics, no dump, unlimited frames.
+2. **Explicit option** - any option passed on the command line wins.
 
 Consequences worth remembering:
 
-- `--preset:city --band-top 0.74` keeps every other `city` value and changes only the band top.
+- `--band-top 0.74` changes only the band top; every other default stays.
 - Options are applied left to right, so repeating one uses the **last** occurrence:
   `--camera-height 1.1 --camera-height 1.4` runs with `1.4`.
 - `--help` exits as soon as it is reached: `--bogus --help` reports the unknown option,
@@ -297,8 +293,8 @@ Consequences worth remembering:
   to absolute paths against the directory you start the process from, not the project
   directory.
 - `--calib` replaces the intrinsics from `--fov`, so a calibration run does not need `--fov`.
-- A preset changes only numeric scene settings. It never overrides `--camera-height`,
-  `--dump`, `--max-frames`, `--deterministic` or the input path.
+- There are no scene presets: the defaults are tuned for motorway footage and every value
+  is an explicit CLI option.
 
 Use these units consistently: meters for `--camera-height`, `--min-depth`, `--max-depth`,
 `--structure-depth` and `--max-step`; degrees for `--pitch` and `--fov`; a fraction of the
@@ -309,13 +305,13 @@ frame height for `--band-top` and `--band-bottom`; pixels for `--lk-window` and 
 | Symptom | Setting to inspect first |
 | --- | --- |
 | Path length is off by a constant factor | `--camera-height`, then `--calib` or `--fov` |
-| Speed looks plausible but the map drifts | `--keyframe-frames`, `--max-step`, preset mismatch |
-| Tracking collapses on fast footage | `highway` / `fast` preset, then `--lk-window`, `--lk-levels`, `--lk-error` |
+| Speed looks plausible but the map drifts | `--keyframe-frames`, `--max-step`, motion-model mismatch |
+| Tracking collapses on fast footage | widen `--lk-window`, add `--lk-levels`, raise `--lk-error` |
 | Road fit is pulled towards walls, cars or sky | narrow `--band-top` / `--band-bottom`; shorten `--max-depth` |
 | Almost no road inliers | widen the band, raise `--min-depth` only if the near field is noisy |
 | Very few structure points | shorter `--keyframe-frames`, larger `--structure-depth`, check `--max-step` |
 | Trajectory jumps during a hand-held pan | smaller `--max-step`, shorter keyframe interval, keep the camera level |
-| Indoor path is far too short or too long | `office` / `home` preset, measured `--camera-height`, then `--fov` |
+| Indoor path is far too short or too long | measured `--camera-height`, then `--fov` |
 | Runs cannot be compared between machines | add `--deterministic --max-frames N --dump <dir>` |
 | No dump appears | check that `--dump` is present and the directory is writable |
 | Window opens but no frames | check the codec and `--path`; OpenCV must be able to decode the file |
@@ -326,80 +322,76 @@ single run cannot tell you whether a change helped; a deterministic baseline can
 ## Usage scenarios
 
 The commands below use `C:\clips\<name>.mp4` as a placeholder. Replace it with a
-local file; video and image files are intentionally not tracked by git. Presets are
-starting points, not calibration: pass a measured `--camera-height` and, when
-possible, a real calibration file or a measured `--fov`.
+local file; video and image files are intentionally not tracked by git. The
+defaults are tuned for motorway footage, not calibration: pass a measured
+`--camera-height` and, when possible, a real calibration file or a measured `--fov`.
 
 ### 1. Minimal smoke test
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road.mp4 `
-  --preset:road --max-frames 120 --deterministic --dump C:\runs\smoke
+  --max-frames 120 --deterministic --dump C:\runs\smoke
 ```
 
 This reads 120 source frames with deterministic pacing and writes the CSV dump. Use
 it to verify the build, OpenGL context, video decoding and dump path before tuning
 anything.
 
-### 2. Dashcam on a normal road (default)
-
-```powershell
-dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road.mp4 `
-  --preset:road --camera-height 1.3
-```
-
-Expected behaviour: near-field ground band `0.70-0.99`, depth window `6-26 m`, step
-gate `3 m`. This is the reference scenario for rigid dashcams, lane markings and
-moderate speeds.
-
-### 3. Motorway and high-speed footage
+### 2. Motorway (default)
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\highway.mp4 `
-  --preset:highway --camera-height 1.3
+  --camera-height 1.3
 ```
 
-Use `--preset:fast` when the camera moves farther between frames than the default
-Lucas-Kanade search can follow, for example low-FPS or very high-speed footage:
+Expected behaviour: ground band `0.68-0.86`, depth window `10-55 m`, keyframe
+interval `12`, step gate `10 m`, LK `27/4/30`. This is the reference scenario for
+motorway footage, lane markings and moderate to high speeds.
+
+### 3. High-speed / low-FPS footage
+
+The motorway defaults cover most highway clips. If the camera moves farther
+between frames than the LK search can follow, widen the search and step gate:
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\fast.mp4 `
-  --preset:fast --camera-height 1.3
+  --camera-height 1.3 --lk-window 31 --lk-levels 4 --lk-error 35 --max-step 15
 ```
 
-### 4. Mountain road
+### 4. Slower road / mountain
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\mountain.mp4 `
-  --preset:mountain --camera-height 1.3
+  --camera-height 1.3 --min-depth 5 --max-depth 30 --band-top 0.70 --band-bottom 0.99 `
+  --keyframe-frames 25 --max-step 4 --lk-window 21 --lk-levels 3 --lk-error 25
 ```
 
-This preset uses a shorter keyframe interval and a wider LK error gate than `road`,
-which helps on winding roads with trees, rock and weak lane markings.
+These values widen the band and tighten the step for winding roads with trees,
+rock and weak lane markings.
 
 ### 5. Dense city / stop-and-go
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\city.mp4 `
-  --preset:city --camera-height 1.3
+  --camera-height 1.3 --min-depth 3 --max-depth 18 --band-top 0.72 --band-bottom 0.98 `
+  --keyframe-frames 10 --max-step 3 --lk-window 21 --lk-levels 3 --lk-error 20
 ```
 
-The `city` preset narrows the depth window and the detection band because buildings,
-parked cars and other vertical surfaces contaminate the ground plane.
+The tighter depth window and band keep buildings, parked cars and other vertical
+surfaces out of the ground-plane fit.
 
 ### 6. Hand-held indoor clip
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\room.mp4 `
-  --preset:home --camera-height 1.3
+  --camera-height 1.3 --pitch 5 --min-depth 1.2 --max-depth 7 `
+  --band-top 0.78 --band-bottom 0.97 --keyframe-frames 8 --max-step 0.6 `
+  --lk-window 21 --lk-levels 3 --lk-error 20
 ```
 
-Use `--preset:office` for larger rooms or a camera held at desk height:
-
-```powershell
-dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\office.mp4 `
-  --preset:office --camera-height 1.5
-```
+For a larger room or a camera held at desk height, override
+`--camera-height 1.5`, `--min-depth 1.5`, `--max-depth 9`, `--band-top 0.72`,
+`--band-bottom 0.96` and `--max-step 0.8`.
 
 The planar model cannot represent roll, pitch changes or vertical bobbing. Avoid
 panning while walking; see [Home and office limitations](#home-and-office-limitations).
@@ -419,7 +411,7 @@ documented in [Calibration](#calibration).
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\short.mp4 `
-  --preset:road --deterministic --max-frames 300 --dump C:\runs\baseline
+  --deterministic --max-frames 300 --dump C:\runs\baseline
 ```
 
 Repeat the command with the same clip and options to get byte-identical CSV dumps.
@@ -428,11 +420,11 @@ them after changing the pipeline.
 
 ### 9. Parameter sweep
 
-Presets are only defaults; any explicit option overrides the preset value:
+The defaults are only starting points; any explicit option overrides the default value:
 
 ```powershell
 dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\city.mp4 `
-  --preset:city --band-top 0.74 --max-step 1.5 --camera-height 1.3
+  --band-top 0.74 --max-step 6 --camera-height 1.3
 ```
 
 Change one parameter at a time. Read `summary.txt` first, then use `metrics.csv` to
@@ -443,8 +435,8 @@ see where tracking, the RANSAC fit or the structure triangulation starts to fail
 - **Path length off by a constant factor:** check `--camera-height`, then adjust
   `--fov` or provide `--calib`. The product of height and focal length sets every
   forward distance.
-- **Tracking drops on fast footage:** use `highway` or `fast`, widen `--lk-window`,
-  add `--lk-levels`, or raise `--lk-error`.
+- **Tracking drops on fast footage:** widen `--lk-window`, add `--lk-levels`, or
+  raise `--lk-error`.
 - **Ground plane contaminated by walls or sky:** narrow the detection band with
   `--band-top` / `--band-bottom`, or shorten `--min-depth` / `--max-depth`.
 - **Indoor trajectory drifts during a pan:** the planar model cannot represent the
@@ -454,8 +446,8 @@ see where tracking, the RANSAC fit or the structure triangulation starts to fail
 ### 11. Offline multi-pass bake
 
 ```powershell
-dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\mountain.mp4 `
-  --preset:mountain --camera-height 1.3 --bake --bake-passes 5
+dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\highway.mp4 `
+  --camera-height 1.3 --bake --bake-passes 5
 ```
 
 No window opens. Each pass is scored, and the best result is written to
@@ -483,7 +475,7 @@ final map or trajectory matters.
 
 ```powershell
 .\HySlam\bin\Debug\net10.0\HySlam.exe --source:video --path C:\clips\road.mp4 `
-  --preset:road --camera-height 1.3 --bake --bake-passes 5 `
+  --camera-height 1.3 --bake --bake-passes 5 `
   --bake-output C:\runs\bake_road
 ```
 
@@ -491,7 +483,7 @@ final map or trajectory matters.
 
 | Pass | Name | What changes | Why |
 | --- | --- | --- | --- |
-| 1 | `baseline` | Preset parameters, no prior | Produces the reference trajectory and the per-frame metrics |
+| 1 | `baseline` | Default parameters, no prior | Produces the reference trajectory and the per-frame metrics |
 | 2 | `adaptive` | Wider LK search, one more pyramid level, 25% higher LK error and a 20% larger step cap when the baseline left gaps | Recovers frames where tracking collapsed |
 | 3 | `guided` | Wider LK window, 10% stricter LK error and the best trajectory so far as a per-frame motion prior | Rejects jumps and keeps the trajectory smooth through weak segments |
 | 4 | `structure` | Half the keyframe interval, up to five structure keyframes and a 400-point triangulation budget (default 220) | Fills map gaps with more and denser triangulation baselines |
@@ -732,33 +724,22 @@ point and the optical-flow focus of expansion on dashcam footage, and the pitch 
 as `pitch = -atan((horizon - cy) / fy)`. This matters: using a centred horizon mis-scales
 every projected depth and collapses the translation estimate.
 
-## Scene presets
+## Highway defaults
 
-Different scenes need different geometry assumptions: how far the ground plane is
-usable, which part of the frame contains it, how much motion happens between frames and
-how far the optical-flow search must reach. `--preset` sets all of those at once. The
-preset is resolved after parsing, so option order does not matter, and any explicit
-option overrides the preset value (`--preset:city --band-top 0.74` is valid).
+The default geometry is tuned for motorway footage: ground depth window `10-55 m`,
+structure depth `120 m`, detection band `0.68-0.86`, keyframe interval `12`,
+maximum step `10 m`, and LK `27/4/30`. There are no scene presets; every value is
+an explicit CLI option, so the pipeline can still be tuned for slower roads,
+city streets or indoor clips.
 
-| Preset | Use for | Aliases |
+| Setting | Default | Why |
 | --- | --- | --- |
-| `road` | dashcam on a normal road, rigid mount (default) | - |
-| `highway` | motorway at cruise speed | `motorway`, `expressway` |
-| `fast` | very high speed or low frame rate | `high-speed`, `highspeed`, `speed` |
-| `mountain` | winding mountain road, trees and rock, no lane markings | `mountain-road` |
-| `city` | dense urban street, near buildings, stop-and-go | `urban` |
-| `office` | office room, hand-held, desk height | - |
-| `home` | home / narrow room, hand-held walking | `indoor`, `house`, `room` |
-
-| Preset | `--min-depth` / `--max-depth` | `--structure-depth` | `--band-top` / `--band-bottom` | `--keyframe-frames` | `--max-step` | `--pitch` | `--lk-window` / `--lk-levels` / `--lk-error` |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `road` | `6` / `26` m | `45` m | `0.70` / `0.99` | `30` | `3.0` m | horizon | `21` / `3` / `20` |
-| `highway` | `10` / `55` m | `120` m | `0.68` / `0.86` | `12` | `10.0` m | horizon | `27` / `4` / `30` |
-| `fast` | `12` / `70` m | `120` m | `0.65` / `0.82` | `6` | `15.0` m | horizon | `31` / `4` / `35` |
-| `mountain` | `5` / `30` m | `70` m | `0.70` / `0.99` | `25` | `4.0` m | horizon | `21` / `3` / `25` |
-| `city` | `3` / `18` m | `40` m | `0.72` / `0.98` | `10` | `3.0` m | horizon | `21` / `3` / `20` |
-| `office` | `1.5` / `9` m | `18` m | `0.72` / `0.96` | `8` | `0.8` m | `5 deg` down | `21` / `3` / `20` |
-| `home` | `1.2` / `7` m | `12` m | `0.78` / `0.97` | `8` | `0.6` m | `5 deg` down | `21` / `3` / `20` |
+| `--min-depth` / `--max-depth` | `10` / `55` m | Far-field road texture is usable at motorway distances |
+| `--structure-depth` | `120` m | Triangulate roadside structures and signs |
+| `--band-top` / `--band-bottom` | `0.68` / `0.86` | Keep the road band just below the horizon |
+| `--keyframe-frames` | `12` | Short enough to keep a usable structure baseline |
+| `--max-step` | `10` m | Allows the larger inter-frame displacement at speed |
+| `--lk-window` / `--lk-levels` / `--lk-error` | `27` / `4` / `30` | Wider search for fast optical flow |
 
 ### Motion prediction (always on)
 
@@ -774,29 +755,12 @@ planar-motion estimate, it is compared against the constant-velocity forecast:
 ### Multi-keyframe structure
 
 Structure points are triangulated from the last three keyframes instead of a
-single one. Multiple baselines give a denser and more consistent point cloud on
-complex city roads where a single baseline is too short or too noisy.
+single one. Multiple baselines give a denser and more consistent point cloud.
 
-Why the values differ:
-
-- **Depth window.** Pixel error grows quadratically with ground distance. A road has a
-  usable plane out to tens of meters, a room only a few meters, and `city` needs a
-  shorter window than open road because buildings and parked cars break the plane.
-- **Detection band.** The band must contain ground, not walls or sky. `home` and
-  `office` use the lower part of the frame; `fast` keeps a thin band just below the
-  horizon, where the inter-frame displacement is still small enough for optical flow.
-- **Keyframe interval and step gate.** A walking camera needs a short keyframe baseline
-  to triangulate anything, and a tight step limit so a tilt during a pan cannot be
-  fitted as a jump. High-speed footage needs the opposite: a larger step gate.
-- **Lucas-Kanade range.** At high speed one frame moves features farther than a `21x21`
-  window with 3 pyramid levels can search, so `highway` and `fast` widen the window and
-  add a level. The per-point error gate scales with it.
-
-Example commands for every preset are in [Usage scenarios](#usage-scenarios).
-
-A preset is a starting point, not a calibration. Always pass `--camera-height` when it is
-known, because it sets the metric scale, and calibrate `--fov` or supply `--calib` when
-the path length is off by a constant factor.
+The defaults are a starting point, not a calibration. Always pass
+`--camera-height` when it is known, because it sets the metric scale, and
+calibrate `--fov` or supply `--calib` when the path length is off by a constant
+factor.
 
 ### Home and office limitations
 
@@ -804,12 +768,12 @@ The planar model allows only yaw, forward/backward and lateral motion at a const
 height with a constant pitch. A person walking and panning introduces roll, pitch and
 vertical bobbing that the model cannot represent, so a pan is partly absorbed as a
 spurious translation and the trajectory can drift sideways. On a 21.6 s room clip
-(`478x850`, walking from a hallway into a bedroom) the `home` preset produces about
+(`478x850`, walking from a hallway into a bedroom) an indoor run produces about
 `18 m` of path and `184` poses, but the last third of the walk pans across the room and
 the trajectory drifts several meters to the side. A rigid mount, a level camera, slow
 motion and avoiding panning while walking all improve the result far more than any
-parameter. `office` is slightly less aggressive than `home` because office floors are
-usually larger and the camera may be held at desk height.
+parameter. A larger room with a desk-height camera is slightly less aggressive because
+the floor is usually larger.
 
 **Focal length dominates the forward scale.** For a monocular camera on a known plane the
 product `height * focal` sets every forward distance, and a room does not contain enough
@@ -825,7 +789,7 @@ Run a short, deterministic pass and inspect the CSV output:
 
 ```powershell
 .\HySlam\bin\Debug\net10.0\HySlam.exe --source:video --path C:\clips\short.mp4 `
-  --preset:road --deterministic --max-frames 300 --dump .\runs\baseline
+  --deterministic --max-frames 300 --dump .\runs\baseline
 ```
 
 The dump directory then contains:

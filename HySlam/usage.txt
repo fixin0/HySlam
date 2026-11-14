@@ -22,17 +22,16 @@ Options:
   --pitch:<deg>        Camera pitch override in degrees (positive looks down).
                        Default: derived from the road horizon (0.665 * frame height)
   --fov:<deg>          Horizontal field of view used by the fallback intrinsics
-  --preset:<name>      Scene preset (see below). Default: road
-  --min-depth:<m>      Near limit of the ground-plane depth window
-  --max-depth:<m>      Far limit of the ground-plane depth window
-  --structure-depth:<m> Maximum depth for triangulated structure
-  --band-top:<f>       Top of the ground detection band, 0..1
-  --band-bottom:<f>    Bottom of the ground detection band, 0..1
-  --keyframe-frames:<N> Max processed frames per keyframe
-  --max-step:<m>       Max camera step per processed frame
-  --lk-window:<px>     Lucas-Kanade window size (odd, 5..61)
-  --lk-levels:<N>      Lucas-Kanade pyramid levels (0..6)
-  --lk-error:<e>       Max Lucas-Kanade per-point error for a valid match
+  --min-depth:<m>      Near limit of the ground-plane depth window. Default: 10
+  --max-depth:<m>      Far limit of the ground-plane depth window. Default: 55
+  --structure-depth:<m> Maximum depth for triangulated structure. Default: 120
+  --band-top:<f>       Top of the ground detection band, 0..1. Default: 0.68
+  --band-bottom:<f>    Bottom of the ground detection band, 0..1. Default: 0.86
+  --keyframe-frames:<N> Max processed frames per keyframe. Default: 12
+  --max-step:<m>       Max camera step per processed frame. Default: 10
+  --lk-window:<px>     Lucas-Kanade window size (odd, 5..61). Default: 27
+  --lk-levels:<N>      Lucas-Kanade pyramid levels (0..6). Default: 4
+  --lk-error:<e>       Max Lucas-Kanade per-point error for a valid match. Default: 30
   --bake               Headless multi-pass bake; implies --deterministic
   --bake-passes:<N>    Number of bake passes, 1..10. Default: 5
   --bake-output:<dir>  Bake output directory. Default: runs/bake_<timestamp>
@@ -42,31 +41,17 @@ Options:
 Options can also be separated from their values:
   --source video --path road.mp4 --calib camera.txt --dump out --max-frames 300
 
-Scene presets (explicit options always override preset values):
-  preset    depth (m)  structure  band        keyframe  step (m)  pitch   LK
-  road      6 - 26     45         0.70-0.99   30        3.0       auto    21/3/20
-  highway   10 - 55    120        0.68-0.86   12        10.0      auto    27/4/30
-  fast      12 - 70    120        0.65-0.82   6         15.0      auto    31/4/35
-  mountain  5 - 30     70         0.70-0.99   25        4.0       auto    21/3/25
-  city      3 - 18     40         0.72-0.98   10        3.0       auto    21/3/20
-  office    1.5 - 9    18         0.72-0.96   8         0.8       5 deg   21/3/20
-  home      1.2 - 7    12         0.78-0.97   8         0.6       5 deg   21/3/20
-
-  Aliases: indoor/house/room -> home, motorway/expressway -> highway,
-  high-speed/highspeed/speed -> fast, urban -> city,
-  mountain-road -> mountain. The LK column is window/levels/error.
-
-  The preset must match the scene and the motion. 'fast' keeps the detection
-  band just below the horizon so the larger inter-frame displacement still fits
-  the LK search range; on slow footage it underestimates the path. 'home' and
-  'office' assume a hand-held camera looking slightly down (pitch defaults to
-  5 degrees) and a floor visible in the lower part of the frame.
+Highway defaults:
+  depth 10 - 55 m, structure 120 m, band 0.68-0.86, keyframe 12,
+  step 10 m, LK 27/4/30. The defaults are tuned for motorway footage.
+  Every value can be overridden with the matching CLI option; explicit
+  options always win. For slower or indoor clips, adjust --min-depth,
+  --max-depth, --band-top, --band-bottom, --max-step and the LK options.
 
   Motion prediction is always active. It forecasts the next camera step from the
   recent history and rejects tracking outliers that deviate too far, which helps
   on high-speed and low-texture footage. Structure points are triangulated from
-  the last three keyframes (multi-keyframe), giving a denser map on complex
-  city roads.
+  the last three keyframes (multi-keyframe), giving a denser map.
 
   Loop closure detection is opt-in (--loop-closure). When enabled, a keyframe
   whose ORB descriptors match an older keyframe snaps the trajectory back to that
@@ -81,8 +66,9 @@ Scene presets (explicit options always override preset values):
 
   Interactive runs also open a source-video window with the active lane drawn as
   a green corridor (two boundaries, a centre line and a translucent fill). The
-  lane is projected from the current metric pose onto the ground plane, so it
-  works on roads without painted markings. Use --no-video to hide the window.
+  lane is projected from the current metric pose onto the ground plane and
+  follows the recent yaw rate, so gentle motorway curves bend the corridor.
+  Use --no-video to hide the window.
 
   The viewer also opens a "HySlam Controls" panel with trackbars for theme,
   visibility (all/roads/objects/buildings), colour mode, grid, lane lines,
@@ -102,7 +88,7 @@ Bake mode (--bake):
   --bake. Passes beyond five repeat the cleanup plan with a wider LK search.
 
   Example:
-    HySlam.exe --source:video --path road.mp4 --preset:road --bake --bake-passes 5 --bake-output runs\bake_road
+    HySlam.exe --source:video --path road.mp4 --bake --bake-passes 5 --bake-output runs\bake_road
 
 Read-back mode (--load / --verify):
   --load opens an exported map in the interactive free-camera viewer. No video is
