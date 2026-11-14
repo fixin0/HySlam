@@ -503,18 +503,21 @@ are accepted (`--bake-passes 1..10`) but rarely improve the result.
 
 Every pass gets one comparable score:
 
-```text
-score = 0.35 * mean_inlier_ratio
-      + 0.25 * coverage
-      + 0.20 * density
-      + 0.20 * smoothness
-```
+$$
+S = 0.35\,\bar{\rho}_{inlier} + 0.25\,c_{coverage} + 0.20\,d_{density} + 0.20\,s_{smoothness},
+$$
 
-- `mean_inlier_ratio` is the average `inliers / matches` over processed frames.
-- `coverage` is the fraction of processed frames with at least 30 inliers.
-- `density` is confirmed map points per processed frame, saturated at 250. A point
-  is confirmed when it was observed at least twice.
-- `smoothness` is `1 - normalized_step_jerk`; sudden step changes lower it.
+where $\bar{\rho}_{inlier}$ is the average `inliers / matches` over processed
+frames, $c_{coverage}$ is the fraction of processed frames with at least 30
+inliers, and
+
+$$
+d_{density} = \min\!\left(1,\frac{\text{confirmed points}}{N\cdot 250}\right)
+$$
+
+is confirmed map points per processed frame, saturated at 250. A point is
+confirmed when it was observed at least twice. $s_{smoothness}$ is
+$1 - \text{normalized step jerk}$; sudden step changes lower it.
 
 `passes.csv` lists every pass and marks the selected one. The selected pass is not
 necessarily the last pass: a pass that lost tracking or produced a noisy map
@@ -641,6 +644,20 @@ optimised: keyframe poses are refined with `solvePnP` against observed 3D
 points, and 3D points are re-triangulated from the best baseline pairs. This
 reduces local drift without a full sparse linear solver.
 
+The window objective is
+
+$$
+\min_{\{R_j,\mathbf{t}_j\},\{\mathbf{X}_i\}}
+\sum_{j\in\mathcal{W}}
+\sum_{i\in\mathcal{V}_j}
+\left\|
+\pi\!\left(K,R_j^\top(\mathbf{X}_i-\mathbf{t}_j)\right)-\mathbf{u}_{ij}
+\right\|_2^2,
+$$
+
+where $\mathcal{W}$ is the keyframe window and $\mathcal{V}_j$ the points visible
+in keyframe $j$.
+
 ### Loop closure and drift correction
 
 Loop closure detection is **opt-in** with `--loop-closure`. When the current
@@ -649,6 +666,10 @@ Lowe's ratio test), the trajectory is snapped back to the matched keyframe
 position. This helps routes that revisit previously seen places, but repetitive
 road texture on a forward-driving dashcam can produce false positives that would
 distort the map, so it is disabled by default.
+
+The match passes the Lowe ratio test when $d_{best}\le0.75\,d_{second}$, and the
+geometric gate requires $\ell_{arc}/\ell_{straight}\ge1.8$ or a heading change
+of at least $30^\circ$.
 
 ### Rendering options
 
@@ -836,6 +857,11 @@ as a green corridor (two boundaries, a centre line and a translucent fill); use
 the ground plane, so it also works on roads without painted markings. The
 `--load` viewer uses the same controls and frames the complete map when it opens.
 
+The corridor points are
+$\mathbf{X}_{left/right}(d)=\mathbf{c}+d\,\mathbf{f}\pm\frac{w}{2}\mathbf{r}$,
+with $\mathbf{f}=(\sin\psi,0,\cos\psi)$ and
+$\mathbf{r}=(\cos\psi,0,-\sin\psi)$.
+
 ## Pipeline
 
 1. `CameraFeedWindow` reads frames from the video file. `SlamEngine` optionally
@@ -884,318 +910,40 @@ the ground plane, so it also works on roads without painted markings. The
    sampled from the source video; the view adds a major/minor ground grid, a vertical
    height axis with 5-unit ticks and a camera frustum.
 
-## Formulas
+### Core geometry
 
-The pipeline uses the following notation: camera coordinates have \(Z\) forward,
-world coordinates have \(x\) right, \(y\) down and \(z\) forward, and the road
-plane is \(y=0\) in the world frame.
-
-### Camera model
-
-Pinhole projection:
+Pinhole projection, with the fallback intrinsics used when no calibration file is
+supplied:
 
 $$
-u = f_x \frac{X}{Z} + c_x, \qquad
-v = f_y \frac{Y}{Z} + c_y.
-$$
-
-Fallback intrinsics when no calibration file is supplied:
-
-$$
-f_x = f_y = 1.1\,W, \qquad
-c_x = \frac{W}{2}, \qquad
-c_y = \frac{H}{2},
-$$
-
-where \(W\) and \(H\) are the frame width and height in pixels.
-
-### Ground-plane projection
-
-The road plane in camera coordinates is
-
-$$
-\mathbf{n}\cdot\mathbf{X} = h,
-$$
-
-where \(\mathbf{n}\) is the plane normal and \(h\) is the camera height. A pixel
-ray is
-
-$$
-\mathbf{d} =
-\left(
-\frac{u-c_x}{f_x},
-\frac{v-c_y}{f_y},
-1
-\right),
-$$
-
-and the ground intersection is
-
-$$
-s = \frac{h}{\mathbf{n}\cdot\mathbf{d}},
+u=f_x\frac{X}{Z}+c_x,\qquad v=f_y\frac{Y}{Z}+c_y,
 \qquad
-\mathbf{X}_{ground} = s\,\mathbf{d}.
+f_x=f_y=1.1W,\quad c_x=\frac{W}{2},\quad c_y=\frac{H}{2}.
 $$
 
-When no pitch is supplied, the pitch is derived from the horizon row:
+A pixel ray $\mathbf{d}=((u-c_x)/f_x,(v-c_y)/f_y,1)$ meets the road plane
+$\mathbf{n}\cdot\mathbf{X}=h$ at
 
 $$
-r_{horizon} = 0.665\,H,
-\qquad
-\theta_{pitch} =
--\arctan\!\left(\frac{r_{horizon}-c_y}{f_y}\right),
+\mathbf{X}_{ground}=\frac{h}{\mathbf{n}\cdot\mathbf{d}}\,\mathbf{d}.
 $$
 
-and the plane normal is
+The planar motion between corresponding ground points is
 
 $$
-\mathbf{n} =
-\left(0,\ \cos\theta_{pitch},\ \sin\theta_{pitch}\right).
-$$
-
-### Planar motion
-
-For corresponding ground points
-\(\mathbf{P}_i=(p_{x,i},p_{z,i})\) and
-\(\mathbf{Q}_i=(q_{x,i},q_{z,i})\), the 2-D rigid model is
-
-$$
-\mathbf{Q}_i = R(\theta)\,\mathbf{P}_i + \mathbf{t},
+\mathbf{Q}=R(\theta)\mathbf{P}+\mathbf{t},
 \qquad
 R(\theta)=
 \begin{bmatrix}
 \cos\theta & -\sin\theta\\
 \sin\theta & \cos\theta
-\end{bmatrix},
-\qquad
-\mathbf{t}=(t_x,t_z).
+\end{bmatrix}.
 $$
 
-The residual of one point is
-
-$$
-r_i =
-\left\|
-R(\theta)\mathbf{P}_i + \mathbf{t} - \mathbf{Q}_i
-\right\|_2.
-$$
-
-RANSAC accepts a point as an inlier when \(r_i \le 0.25\) m. The fit is rejected
-when the median residual exceeds \(0.35\) m, when there are fewer than 20
-inliers, when the inlier ratio is below \(0.40\), when
-\(|\theta| > 8^\circ\), or when \(\|\mathbf{t}\|_2 > 3\) m (preset-dependent).
-
-Motion smoothing uses exponential filters:
-
-$$
-\hat{\theta}_k =
-\hat{\theta}_{k-1} + \alpha_\theta\left(\theta_k-\hat{\theta}_{k-1}\right),
-\qquad
-\hat{\mathbf{t}}_k =
-\hat{\mathbf{t}}_{k-1} + \alpha_t\left(\mathbf{t}_k-\hat{\mathbf{t}}_{k-1}\right),
-$$
-
-with \(\alpha_\theta=0.20\) and \(\alpha_t=0.30\).
-
-### Pose composition
-
-The metric state is updated as
-
-$$
-\psi_k = \psi_{k-1} + \hat{\theta}_k,
-\qquad
-\mathbf{c}_k = \mathbf{c}_{k-1} + \hat{\mathbf{t}}_k.
-$$
-
-The camera-to-world rotation is
-
-$$
-R = R_y(\psi)\,R_{pitch},
-\qquad
-R_{pitch} =
-\begin{bmatrix}
-1 & 0 & 0\\
-0 & \cos\theta_{pitch} & \sin\theta_{pitch}\\
-0 & -\sin\theta_{pitch} & \cos\theta_{pitch}
-\end{bmatrix},
-$$
-
-and the camera center is
-
-$$
-\mathbf{t} = (c_x,\ -h,\ c_z).
-$$
-
-### Structure triangulation
-
-The relative transform from a keyframe to the current frame is
-
-$$
-\mathbf{X}_{cur} = R_{rel}\,\mathbf{X}_{kf} + \mathbf{t}_{rel}.
-$$
-
-With \(K\) the intrinsic matrix, the projection matrices are
-
-$$
-P_1 = K\,[I \mid 0],
-\qquad
-P_2 = K\,[R_{rel} \mid \mathbf{t}_{rel}],
-$$
-
-and the homogeneous 3-D point satisfies
-
-$$
-\mathbf{x}_1 \times \left(P_1\mathbf{X}\right) = 0,
-\qquad
-\mathbf{x}_2 \times \left(P_2\mathbf{X}\right) = 0.
-$$
-
-The reprojection error for a point \(\mathbf{X}\) in camera \(j\) is
-
-$$
-e_j =
-\left\|
-\pi\!\left(K,\mathbf{X}_j\right) - \mathbf{u}_j
-\right\|_2,
-$$
-
-where \(\pi\) is the pinhole projection. Points are kept when
-\(e_j \le 2\) px, the parallax is at least \(0.3^\circ\), and the depth lies in
-the configured range.
-
-### Local bundle adjustment
-
-For a sliding window \(\mathcal{W}\) of keyframes, the objective is
-
-$$
-\min_{\{R_j,\mathbf{t}_j\},\{\mathbf{X}_i\}}
-\sum_{j\in\mathcal{W}}
-\sum_{i\in\mathcal{V}_j}
-\rho\!\left(
-\left\|
-\pi\!\left(K, R_j^\top\left(\mathbf{X}_i-\mathbf{t}_j\right)\right)
-- \mathbf{u}_{ij}
-\right\|_2^2
-\right),
-$$
-
-where \(\mathcal{V}_j\) is the set of points visible in keyframe \(j\) and
-\(\rho\) is a robust loss. The implementation alternates between `solvePnP`
-pose updates and multi-view point re-triangulation.
-
-### Loop closure
-
-Descriptor matches pass the Lowe ratio test when
-
-$$
-d_{best} \le 0.75\,d_{second}.
-$$
-
-A loop candidate must also satisfy the geometric gate:
-
-$$
-\Delta id \ge 10,
-\qquad
-\left\|\mathbf{c}_{cur}-\mathbf{c}_{match}\right\|_2 \ge 5\ \text{m},
-$$
-
-$$
-\ell_{arc} \ge 20\ \text{m},
-\qquad
-\left(
-\frac{\ell_{arc}}{\ell_{straight}} \ge 1.8
-\ \text{or}\
-\Delta\psi \ge 30^\circ
-\right),
-$$
-
-where \(\ell_{arc}\) is the path length along the keyframe history and
-\(\ell_{straight}\) is the straight-line distance. On a loop, the current pose
-is snapped to the matched keyframe:
-
-$$
-\mathbf{t}_{cur} \leftarrow \mathbf{t}_{match},
-\qquad
-R_{cur} \leftarrow R_{match}R_{rel}^\top.
-$$
-
-The correction delta is applied to all later keyframes and map points:
-
-$$
-R' = \Delta R\,R,
-\qquad
-\mathbf{t}' = \Delta R\,\mathbf{t} + \Delta\mathbf{t}.
-$$
-
-### Bake score
-
-Each pass is scored by
-
-$$
-S =
-0.35\,\bar{\rho}_{inlier}
-+ 0.25\,c_{coverage}
-+ 0.20\,d_{density}
-+ 0.20\,s_{smoothness},
-$$
-
-where
-
-$$
-\bar{\rho}_{inlier} =
-\frac{1}{N}\sum_{k=1}^{N}
-\frac{\text{inliers}_k}{\text{matches}_k},
-\qquad
-c_{coverage} =
-\frac{\#\{k:\text{inliers}_k \ge 30\}}{N},
-$$
-
-$$
-d_{density} =
-\min\!\left(
-1,\
-\frac{\text{confirmed points}}{\max(1,N)\cdot 250}
-\right),
-\qquad
-s_{smoothness} = 1 - \text{normalized step jerk}.
-$$
-
-A point is *confirmed* when it has been observed at least twice
-(\(\text{Observations}\ge 2\)).
-
-### Height colour palette
-
-The LiDAR-style palette uses the Turbo approximation:
-
-$$
-\begin{aligned}
-r(t) &= 0.13572138 + 4.61539260t - 42.66032258t^2 \\
-     &\quad + 132.13108234t^3 - 152.94239396t^4 + 59.28637943t^5,\\
-g(t) &= 0.09140261 + 2.19418839t + 4.84296658t^2 \\
-     &\quad - 14.18503333t^3 + 4.27729857t^4 + 2.82956604t^5,\\
-b(t) &= 0.10667330 + 12.64194608t - 60.58204836t^2 \\
-     &\quad + 110.36276771t^3 - 89.90310912t^4 + 27.34824973t^5,
-\end{aligned}
-$$
-
-with \(t\in[0,1]\) the normalized point height and each channel clamped to
-\([0,1]\).
-
-### Active lane overlay
-
-For a lane width \(w\) and a distance \(d\) ahead, the world points are
-
-$$
-\mathbf{X}_{left}(d) =
-\mathbf{c} + d\,\mathbf{f} - \frac{w}{2}\mathbf{r},
-\qquad
-\mathbf{X}_{right}(d) =
-\mathbf{c} + d\,\mathbf{f} + \frac{w}{2}\mathbf{r},
-$$
-
-where \(\mathbf{f}=(\sin\psi,0,\cos\psi)\) is the ground-plane forward direction
-and \(\mathbf{r}=(\cos\psi,0,-\sin\psi)\) is the right direction. Each point is
-projected with the pinhole model to draw the green corridor.
+Structure points use the relative pose
+$\mathbf{X}_{cur}=R_{rel}\mathbf{X}_{kf}+\mathbf{t}_{rel}$ with
+$P_1=K[I\mid0]$ and $P_2=K[R_{rel}\mid\mathbf{t}_{rel}]$; a point is kept when
+the reprojection error is at most 2 px and the parallax is at least 0.3 deg.
 
 ## Repository and data policy
 
