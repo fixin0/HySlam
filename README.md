@@ -691,7 +691,9 @@ point cloud reads like a LiDAR scan; add `--grid` to show them.
 - `SemanticFilter` — render only points with specific labels
 - `MinConfidence` — skip points below a confidence threshold
 - `ShowGrid` — draw the ground grid and height axis
-- `ShowTrajectory` — draw the trajectory points
+- `ShowTrajectory` — draw the camera path as a continuous cyan line
+- `ShowLaneLines` — draw two green lane/road boundary lines on the road plane
+- `LaneWidthMeters` — lane width used for the boundary offset (default `3.5`)
 - `EnableFrustumCulling` — skip points outside the camera frustum
 
 ## Calibration

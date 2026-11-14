@@ -44,8 +44,14 @@ namespace HySlam.Core.Rendering
         /// <summary>Draw the ground grid and height axis.</summary>
         public bool ShowGrid { get; set; }
 
-        /// <summary>Draw the trajectory points.</summary>
+        /// <summary>Draw the trajectory as a continuous line.</summary>
         public bool ShowTrajectory { get; set; } = true;
+
+        /// <summary>Draw the lane/road boundaries as continuous lines.</summary>
+        public bool ShowLaneLines { get; set; } = true;
+
+        /// <summary>Lane width in meters used for the boundary offset.</summary>
+        public double LaneWidthMeters { get; set; } = 3.5;
 
         /// <summary>
         /// When true, points outside the camera frustum are not uploaded.
@@ -170,6 +176,8 @@ namespace HySlam.Core.Rendering
             if (pose is not null)
                 AddCameraFrustum(lines, pose);
 
+            AddTrajectoryLines(lines, map);
+
             int lineStart = 0;
             int lineCount = lines.Count / 6;
 
@@ -231,18 +239,6 @@ namespace HySlam.Core.Rendering
 
             int pointCount = renderedPoints;
 
-            // Trajectory (bright green points)
-            int trajStart = pointStart + pointCount;
-            int trajCount = 0;
-            if (options.ShowTrajectory)
-            {
-                foreach (var c in map.Trajectory)
-                {
-                    AddVertex(points, c.X, c.Y, c.Z, 0.1f, 1.0f, 0.3f);
-                }
-                trajCount = map.Trajectory.Count;
-            }
-
             // The point cloud is the expensive part of the upload; geometry lines are
             // small. Reallocate the buffer only when its total size changes, otherwise
             // update just the line range.
@@ -301,13 +297,6 @@ namespace HySlam.Core.Rendering
                 // Point size varies with confidence: confident points are larger.
                 shader.SetFloat("uPointSize", 5.0f);
                 GL.DrawArrays(PrimitiveType.Points, pointStart, pointCount);
-            }
-
-            if (trajCount > 1)
-            {
-                shader.SetInt("uRoundPoints", 1);
-                shader.SetFloat("uPointSize", 7.0f);
-                GL.DrawArrays(PrimitiveType.Points, trajStart, trajCount);
             }
 
             GL.BindVertexArray(0);
@@ -409,6 +398,54 @@ namespace HySlam.Core.Rendering
             eye = freeCamTarget + offset;
             target = freeCamTarget;
             up = GLVector3.UnitY;
+        }
+
+        /// <summary>
+        /// Draws the camera trajectory as a continuous line and, when enabled, two
+        /// lane/road boundary lines offset from the path. The boundaries are placed
+        /// on the road plane (GL y = 0) rather than at camera height.
+        /// </summary>
+        private void AddTrajectoryLines(List<float> lines, MapData map)
+        {
+            if (!options.ShowTrajectory || map.Trajectory.Count < 2)
+                return;
+
+            // Camera path in cyan so it stands apart from the green road boundaries.
+            var trajectoryColor = new GLVector3(0.1f, 0.9f, 1.0f);
+            for (int i = 0; i < map.Trajectory.Count - 1; i++)
+                AddLine(lines, map.Trajectory[i], map.Trajectory[i + 1], trajectoryColor);
+
+            if (!options.ShowLaneLines)
+                return;
+
+            var laneColor = new GLVector3(0.2f, 1.0f, 0.3f);
+            float halfWidth = (float)(options.LaneWidthMeters * 0.5);
+
+            for (int i = 0; i < map.Trajectory.Count - 1; i++)
+            {
+                var a = map.Trajectory[i];
+                var b = map.Trajectory[i + 1];
+
+                var direction = b - a;
+                direction.Y = 0f;
+                if (direction.LengthSquared < 1e-6f)
+                    continue;
+
+                direction = GLVector3.Normalize(direction);
+                var right = GLVector3.Cross(direction, GLVector3.UnitY);
+                if (right.LengthSquared < 1e-6f)
+                    continue;
+
+                right = GLVector3.Normalize(right);
+                var offset = right * halfWidth;
+
+                // Place the boundaries on the road plane, not at camera height.
+                var aGround = new GLVector3(a.X, 0f, a.Z);
+                var bGround = new GLVector3(b.X, 0f, b.Z);
+
+                AddLine(lines, aGround - offset, bGround - offset, laneColor);
+                AddLine(lines, aGround + offset, bGround + offset, laneColor);
+            }
         }
 
         private void AddGroundGrid(List<float> data)
