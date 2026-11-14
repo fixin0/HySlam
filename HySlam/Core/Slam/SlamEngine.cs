@@ -1310,13 +1310,13 @@ namespace HySlam.Core.Slam
         /// image up to the road horizon. When painted lane markings are visible,
         /// <see cref="LaneTracker"/> fits and smooths the left/right boundaries
         /// directly from the image; otherwise the ego lane is projected from the
-        /// current metric pose.
+        /// current metric pose. The fill is kept subtle and no label is drawn.
         /// </summary>
         public void DrawLaneOverlay(
             Mat frame,
             double laneWidthMeters = 3.5,
             double nearMeters = 1.2,
-            double farMeters = 90.0)
+            double farMeters = 35.0)
         {
             if (frame.Empty() || frame.Channels() < 3)
                 return;
@@ -1330,9 +1330,7 @@ namespace HySlam.Core.Slam
             var right = new List<Point>();
             var centre = new List<Point>();
 
-            // Integrate a constant-curvature arc ahead of the camera. This makes the
-            // projected corridor bend through gentle motorway curves instead of
-            // staying on the initial heading.
+            // Integrate a constant-curvature arc ahead of the camera.
             const double step = 1.0;
             double h = heading;
             double x = centerX;
@@ -1341,7 +1339,6 @@ namespace HySlam.Core.Slam
 
             for (double d = 0.0; d <= farMeters; d += step)
             {
-                // Local right vector on the ground plane.
                 double rx = Math.Cos(h);
                 double rz = -Math.Sin(h);
 
@@ -1359,7 +1356,6 @@ namespace HySlam.Core.Slam
                     centre.Add(centrePoint.Value);
                 }
 
-                // Advance along the arc.
                 h += curvature * step;
                 x += Math.Sin(h) * step;
                 z += Math.Cos(h) * step;
@@ -1371,34 +1367,21 @@ namespace HySlam.Core.Slam
             var green = new Scalar(0, 255, 0);
             var darkGreen = new Scalar(0, 190, 0);
 
-            // Translucent lane fill.
             var polygon = new List<Point>(left.Count + right.Count);
             polygon.AddRange(left);
             for (int i = right.Count - 1; i >= 0; i--)
                 polygon.Add(right[i]);
 
+            // More transparent lane fill: subtle green over the whole lane width.
             using (var overlay = frame.Clone())
             {
                 Cv2.FillPoly(overlay, new[] { polygon.ToArray() }, green);
-                Cv2.AddWeighted(overlay, 0.15, frame, 0.85, 0, frame);
+                Cv2.AddWeighted(overlay, 0.10, frame, 0.90, 0, frame);
             }
 
             Cv2.Polylines(frame, new[] { left.ToArray() }, false, darkGreen, 2);
             Cv2.Polylines(frame, new[] { right.ToArray() }, false, darkGreen, 2);
             Cv2.Polylines(frame, new[] { centre.ToArray() }, false, green, 3);
-
-            var labelAnchor = centre[Math.Min(centre.Count - 1, centre.Count / 3)];
-            var labelOrigin = new Point(
-                Math.Clamp(labelAnchor.X - 60, 4, frame.Cols - 140),
-                Math.Max(20, labelAnchor.Y - 20));
-            Cv2.PutText(
-                frame,
-                "ACTIVE LANE",
-                labelOrigin,
-                HersheyFonts.HersheySimplex,
-                0.6,
-                green,
-                2);
         }
 
         /// <summary>

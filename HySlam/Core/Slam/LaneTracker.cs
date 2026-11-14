@@ -300,13 +300,9 @@ namespace HySlam.Core.Slam
                 if (xr <= xl + 4.0)
                     continue;
 
-                int xLeft = (int)Math.Round(xl);
-                int xRight = (int)Math.Round(xr);
-                int xCentre = (int)Math.Round((xl + xr) * 0.5);
-
-                left.Add(new Point(xLeft, y));
-                right.Add(new Point(xRight, y));
-                centre.Add(new Point(xCentre, y));
+                left.Add(new Point((int)Math.Round(xl), y));
+                right.Add(new Point((int)Math.Round(xr), y));
+                centre.Add(new Point((int)Math.Round((xl + xr) * 0.5), y));
             }
 
             if (centre.Count < 2)
@@ -320,21 +316,16 @@ namespace HySlam.Core.Slam
             for (int i = right.Count - 1; i >= 0; i--)
                 polygon.Add(right[i]);
 
+            // More transparent lane fill: subtle green over the whole lane width.
             using (var overlay = frame.Clone())
             {
                 Cv2.FillPoly(overlay, new[] { polygon.ToArray() }, green);
-                Cv2.AddWeighted(overlay, 0.18, frame, 0.82, 0, frame);
+                Cv2.AddWeighted(overlay, 0.10, frame, 0.90, 0, frame);
             }
 
             Cv2.Polylines(frame, new[] { left.ToArray() }, false, darkGreen, 2);
             Cv2.Polylines(frame, new[] { right.ToArray() }, false, darkGreen, 2);
             Cv2.Polylines(frame, new[] { centre.ToArray() }, false, green, 3);
-
-            var anchor = centre[Math.Min(centre.Count - 1, (int)(centre.Count * 0.65))];
-            var origin = new Point(
-                Math.Clamp(anchor.X - 60, 4, frame.Cols - 140),
-                Math.Clamp(anchor.Y - 16, 20, frame.Rows - 12));
-            Cv2.PutText(frame, "ACTIVE LANE", origin, HersheyFonts.HersheySimplex, 0.6, green, 2);
         }
 
         private static double Eval(double[] coeffs, double y, int horizonY = 0, int bottomY = 1)
