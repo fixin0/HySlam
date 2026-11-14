@@ -22,6 +22,22 @@ namespace HySlam.Core.Rendering
         Confidence,
     }
 
+    /// <summary>Viewer colour theme.</summary>
+    public enum RenderTheme
+    {
+        Dark,
+        Light,
+    }
+
+    /// <summary>Which map points are visible.</summary>
+    public enum VisibilityFilter
+    {
+        All,
+        RoadsOnly,
+        ObjectsOnly,
+        BuildingsOnly,
+    }
+
     /// <summary>
     /// Rendering options for the map viewer.
     /// </summary>
@@ -40,6 +56,15 @@ namespace HySlam.Core.Rendering
 
         /// <summary>Point colour mode. Defaults to the LiDAR-style height palette.</summary>
         public RenderColorMode ColorMode { get; set; } = RenderColorMode.Height;
+
+        /// <summary>Viewer background and grid theme.</summary>
+        public RenderTheme Theme { get; set; } = RenderTheme.Dark;
+
+        /// <summary>Which point classes are visible.</summary>
+        public VisibilityFilter Visibility { get; set; } = VisibilityFilter.All;
+
+        /// <summary>Point size in pixels.</summary>
+        public float PointSize { get; set; } = 5.0f;
 
         /// <summary>Draw the ground grid and height axis.</summary>
         public bool ShowGrid { get; set; }
@@ -124,7 +149,10 @@ namespace HySlam.Core.Rendering
             // Single full-window free-camera view.
             GL.Viewport(0, 0, size.X, size.Y);
             GL.Scissor(0, 0, size.X, size.Y);
-            GL.ClearColor(0.0f, 0.0f, 0.0f, 1f); // Pure black background
+            if (options.Theme == RenderTheme.Light)
+                GL.ClearColor(0.92f, 0.92f, 0.92f, 1f);
+            else
+                GL.ClearColor(0.0f, 0.0f, 0.0f, 1f);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
             RenderScene(size, map, pose);
         }
@@ -226,6 +254,10 @@ namespace HySlam.Core.Rendering
                 if (p.Confidence < options.MinConfidence)
                     continue;
 
+                // Road / object / building visibility filter.
+                if (!PassesVisibilityFilter(p))
+                    continue;
+
                 // Frustum culling.
                 if (frustumMVP.HasValue && !IsPointInFrustum(p.Position, frustumMVP.Value))
                     continue;
@@ -294,8 +326,8 @@ namespace HySlam.Core.Rendering
             if (pointCount > 0)
             {
                 shader.SetInt("uRoundPoints", 1);
-                // Point size varies with confidence: confident points are larger.
-                shader.SetFloat("uPointSize", 5.0f);
+                // Point size is controlled from the viewer menu.
+                shader.SetFloat("uPointSize", options.PointSize);
                 GL.DrawArrays(PrimitiveType.Points, pointStart, pointCount);
             }
 
@@ -321,6 +353,30 @@ namespace HySlam.Core.Rendering
             return x >= -w && x <= w &&
                    y >= -w && y <= w &&
                    z >= -w && z <= w;
+        }
+
+        private bool PassesVisibilityFilter(MapPoint point)
+        {
+            switch (options.Visibility)
+            {
+                case VisibilityFilter.RoadsOnly:
+                    // Prefer semantic labels when the map has them; otherwise use
+                    // the road-plane height as a fallback for older exports.
+                    if (!string.IsNullOrEmpty(point.SemanticLabel))
+                        return point.SemanticLabel == "ground";
+                    return Math.Abs(point.Position.Y) < 0.5f;
+
+                case VisibilityFilter.ObjectsOnly:
+                    if (!string.IsNullOrEmpty(point.SemanticLabel))
+                        return point.SemanticLabel != "ground" && point.SemanticLabel != "sky";
+                    return Math.Abs(point.Position.Y) >= 0.5f;
+
+                case VisibilityFilter.BuildingsOnly:
+                    return point.SemanticLabel == "building";
+
+                default:
+                    return true;
+            }
         }
 
         private GLVector3 ColorForPoint(MapPoint point, float minHeight, float maxHeight)
@@ -455,10 +511,20 @@ namespace HySlam.Core.Rendering
             const float majorStep = 25f;
             const float y = 0.0f;
 
-            var minorColor = new GLVector3(0.16f, 0.18f, 0.22f);
-            var majorColor = new GLVector3(0.32f, 0.35f, 0.40f);
-            var axisX = new GLVector3(0.55f, 0.18f, 0.18f);
-            var axisZ = new GLVector3(0.18f, 0.30f, 0.60f);
+            bool light = options.Theme == RenderTheme.Light;
+
+            var minorColor = light
+                ? new GLVector3(0.78f, 0.80f, 0.83f)
+                : new GLVector3(0.16f, 0.18f, 0.22f);
+            var majorColor = light
+                ? new GLVector3(0.55f, 0.58f, 0.62f)
+                : new GLVector3(0.32f, 0.35f, 0.40f);
+            var axisX = light
+                ? new GLVector3(0.75f, 0.25f, 0.25f)
+                : new GLVector3(0.55f, 0.18f, 0.18f);
+            var axisZ = light
+                ? new GLVector3(0.25f, 0.40f, 0.75f)
+                : new GLVector3(0.18f, 0.30f, 0.60f);
 
             for (float x = -extent; x <= extent; x += step)
             {
@@ -484,13 +550,15 @@ namespace HySlam.Core.Rendering
         /// <summary>
         /// Vertical Y axis with 5-unit ticks, so height differences can be read directly.
         /// </summary>
-        private static void AddHeightAxis(List<float> data)
+        private void AddHeightAxis(List<float> data)
         {
             const float height = 30f;
             const float tickStep = 5f;
             const float tick = 2.5f;
 
-            var color = new GLVector3(0.30f, 0.50f, 0.55f);
+            var color = options.Theme == RenderTheme.Light
+                ? new GLVector3(0.35f, 0.45f, 0.50f)
+                : new GLVector3(0.30f, 0.50f, 0.55f);
 
             AddLine(data, new GLVector3(0f, 0f, 0f), new GLVector3(0f, height, 0f), color);
 

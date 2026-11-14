@@ -139,7 +139,7 @@ namespace HySlam
                         options.LoadDirectory);
 
                     using var mapWindow = new LoadedMapWindow(
-                        options.LoadDirectory, map, options.ColorMode, options.ShowGrid);
+                        options.LoadDirectory, map, options.ColorMode, options.Theme, options.ShowGrid);
                     Log.Information("Entering the map viewer.");
                     mapWindow.Run();
                     Log.Information("Map viewer closed normally.");
@@ -207,6 +207,7 @@ namespace HySlam
             string scenePreset = "road";
             bool loopClosure = false;
             RenderColorMode colorMode = RenderColorMode.Height;
+            RenderTheme theme = RenderTheme.Dark;
             bool showGrid = false;
             bool showVideo = true;
             bool bake = false;
@@ -311,6 +312,15 @@ namespace HySlam
                                 return ParseResult.Error;
 
                             if (!TryParseColorMode(colorModeValue, out colorMode))
+                                return ParseResult.Error;
+
+                            break;
+
+                        case "--theme":
+                            if (!TryReadValue(args, ref i, inlineValue, name, out string? themeValue))
+                                return ParseResult.Error;
+
+                            if (!TryParseTheme(themeValue, out theme))
                                 return ParseResult.Error;
 
                             break;
@@ -569,6 +579,7 @@ namespace HySlam
                     LoadDirectory = loadDirectory,
                     VerifyDirectory = verifyDirectory,
                     ColorMode = colorMode,
+                    Theme = theme,
                     ShowGrid = showGrid
                 };
 
@@ -700,6 +711,7 @@ namespace HySlam
                 Deterministic = deterministic,
                 EnableLoopClosure = loopClosure,
                 ColorMode = colorMode,
+                Theme = theme,
                 ShowGrid = showGrid,
                 ShowVideo = showVideo,
                 CameraHeight = cameraHeight,
@@ -838,6 +850,23 @@ namespace HySlam
                         "Error: '--color-mode' must be sampled, semantic, height or confidence, got '{Value}'.",
                         text);
                     value = RenderColorMode.Height;
+                    return false;
+            }
+        }
+
+        private static bool TryParseTheme(string text, out RenderTheme value)
+        {
+            switch (text.Trim().ToLowerInvariant())
+            {
+                case "dark":
+                    value = RenderTheme.Dark;
+                    return true;
+                case "light":
+                    value = RenderTheme.Light;
+                    return true;
+                default:
+                    Log.Error("Error: '--theme' must be dark or light, got '{Value}'.", text);
+                    value = RenderTheme.Dark;
                     return false;
             }
         }

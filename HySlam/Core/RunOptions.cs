@@ -128,6 +128,9 @@ namespace HySlam.Core
         /// </summary>
         public RenderColorMode ColorMode { get; init; } = RenderColorMode.Height;
 
+        /// <summary>Viewer background and grid theme.</summary>
+        public RenderTheme Theme { get; init; } = RenderTheme.Dark;
+
         /// <summary>Draw the ground grid and height axis in the viewer.</summary>
         public bool ShowGrid { get; init; }
 

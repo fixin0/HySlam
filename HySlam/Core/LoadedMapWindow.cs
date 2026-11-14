@@ -1,5 +1,6 @@
 using HySlam.Core.Data;
 using HySlam.Core.Rendering;
+using HySlam.UI;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
@@ -21,12 +22,14 @@ namespace HySlam.Core
         private readonly string directory;
         private readonly MapData map;
         private readonly RenderColorMode colorMode;
+        private readonly RenderTheme theme;
         private readonly bool showGrid;
 
         private MapRenderer renderer = null!;
+        private ViewerControls controls = null!;
         private int renderFrames;
 
-        public LoadedMapWindow(string directory, MapData map, RenderColorMode colorMode, bool showGrid)
+        public LoadedMapWindow(string directory, MapData map, RenderColorMode colorMode, RenderTheme theme, bool showGrid)
             : base(
                 CreateGameWindowSettings(),
                 CreateNativeWindowSettings(directory))
@@ -34,6 +37,7 @@ namespace HySlam.Core
             this.directory = directory;
             this.map = map;
             this.colorMode = colorMode;
+            this.theme = theme;
             this.showGrid = showGrid;
         }
 
@@ -81,8 +85,10 @@ namespace HySlam.Core
 
                 renderer = new MapRenderer();
                 renderer.Options.ColorMode = colorMode;
+                renderer.Options.Theme = theme;
                 renderer.Options.ShowGrid = showGrid;
                 renderer.FrameMap(map);
+                controls = new ViewerControls(renderer.Options);
 
                 double pathMeters = 0.0;
                 for (int i = 1; i < map.Trajectory.Count; i++)
@@ -125,6 +131,8 @@ namespace HySlam.Core
                 float scroll = mouse.ScrollDelta.Y;
                 if (scroll != 0)
                     renderer.Zoom(scroll);
+
+                controls.Update(renderer.Options);
             }
             catch (Exception exception)
             {
@@ -160,6 +168,7 @@ namespace HySlam.Core
         {
             base.OnUnload();
 
+            controls?.Dispose();
             renderer?.Dispose();
             Log.Information("Map viewer closed after {Frames} frames.", renderFrames);
         }

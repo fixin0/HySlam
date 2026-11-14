@@ -236,6 +236,7 @@ rejects a value. Option names are case-sensitive; preset names are not.
 | `--deterministic` | flag | off | no value | Read one source frame per update instead of wall-clock pacing; also seeds OpenCV RNG |
 | `--loop-closure` | flag | off | no value | Enable loop closure detection and drift correction. Opt-in because repetitive road texture on a forward-driving clip can produce false positives |
 | `--color-mode` | name | `height` | `height`, `sampled`, `semantic`, `confidence` | Point colour palette. `height` is the LiDAR-style Turbo ramp; `sampled` keeps the video colours |
+| `--theme` | name | `dark` | `dark`, `light` | Viewer background and grid theme. Can also be changed live from the controls panel |
 | `--grid` | flag | off | no value | Show the ground grid and height axis. Hidden by default for a clean point-cloud view |
 | `--no-video` | flag | off | no value | Do not open the source-video window with the active-lane overlay |
 | `--camera-height` | meters | `1.3` | `> 0` | Camera height above the road. Sets the metric scale of the whole trajectory |
@@ -858,6 +859,10 @@ as a green corridor (two boundaries, a centre line and a translucent fill); use
 `--no-video` to hide it. The lane is projected from the current metric pose onto
 the ground plane, so it also works on roads without painted markings. The
 `--load` viewer uses the same controls and frames the complete map when it opens.
+
+A **HySlam Controls** panel provides live trackbars for theme (dark / light),
+visibility (all / roads only / objects only / buildings only), colour mode,
+grid, lane lines, trajectory and point size. Changes apply immediately.
 
 The corridor points are
 $\mathbf{X}_{left/right}(d)=\mathbf{c}+d\,\mathbf{f}\pm\frac{w}{2}\mathbf{r}$,

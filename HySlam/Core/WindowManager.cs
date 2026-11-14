@@ -26,6 +26,7 @@ namespace HySlam.Core
         private SlamEngine slam = null!;
         private MapRenderer renderer = null!;
         private RunRecorder recorder = null!;
+        private ViewerControls controls = null!;
 
         private int frameIndex;
         private int framesRead;
@@ -90,6 +91,7 @@ namespace HySlam.Core
 
                 InitializeRenderer();
                 InitializeSLAM();
+                controls = new ViewerControls(renderer.Options);
 
                 Log.Information("HySlam initialized -> {VideoPath}", videoPath);
                 Log.Information("OnLoad: end.");
@@ -105,6 +107,7 @@ namespace HySlam.Core
         {
             renderer = new MapRenderer();
             renderer.Options.ColorMode = options.ColorMode;
+            renderer.Options.Theme = options.Theme;
             renderer.Options.ShowGrid = options.ShowGrid;
             Log.Information("Map Renderer initialized.");
             if(renderer == null)
@@ -217,6 +220,8 @@ namespace HySlam.Core
                 {
                     renderer.Zoom(scroll);
                 }
+
+                controls.Update(renderer.Options);
 
                 if (!videoEnded)
                 {
@@ -399,6 +404,7 @@ namespace HySlam.Core
             FinishRecording();
             Log.Information("OnUnload: recording finished.");
 
+            controls?.Dispose();
             capture?.Dispose();
             keyframes?.Dispose();
             slam?.Dispose();
