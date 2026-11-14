@@ -43,6 +43,13 @@ namespace HySlam.Core.Slam
         private const double TranslationSmoothing = 0.30;
         private const int MaxPredictedFrames = 2;
 
+        // Lane-overlay curvature filtering. The instantaneous yaw rate is noisy, so
+        // the overlay uses the motion predictor's averaged step and a low-pass filter.
+        private const double MaxLaneCurvature = 0.03;       // rad/m, radius >= ~33 m
+        private const double CurvatureSmoothing = 0.12;
+        private const double CurvatureDeadband = 0.0015;
+        private const double MinCurvatureStepMeters = 0.5;
+
         // === Map ===
         private const double SkyMargin = 0.18;          // ignored top fraction of the image
         private const double MinStructureDepth = 0.5;   // meters
@@ -972,13 +979,25 @@ namespace HySlam.Core.Slam
             }
 
             // Curvature in radians per meter, used to bend the projected lane
-            // overlay through gentle bends. Clamp it to a radius of at least 5 m.
-            double stepDistance = Math.Sqrt(tx * tx + tz * tz);
-            if (stepDistance > 0.05)
+            // overlay through gentle bends. Use the motion predictor's averaged
+            // step so single-frame yaw noise does not swing the lane.
+            var (forecastYaw, forecastStepX, forecastStepZ) = motionPredictor.Forecast();
+            double forecastStep = Math.Sqrt(
+                forecastStepX * forecastStepX + forecastStepZ * forecastStepZ);
+
+            if (forecastStep > MinCurvatureStepMeters)
             {
-                double curvature = smoothedYawStep / stepDistance;
-                curvature = Math.Clamp(curvature, -0.2, 0.2);
-                smoothedCurvature += 0.25 * (curvature - smoothedCurvature);
+                double curvature = forecastYaw / forecastStep;
+                if (Math.Abs(curvature) < CurvatureDeadband)
+                    curvature = 0.0;
+
+                curvature = Math.Clamp(curvature, -MaxLaneCurvature, MaxLaneCurvature);
+                smoothedCurvature += CurvatureSmoothing * (curvature - smoothedCurvature);
+            }
+            else
+            {
+                // Decay toward straight when the camera is nearly stationary.
+                smoothedCurvature *= 0.95;
             }
 
             double nextHeading = heading + smoothedYawStep;
@@ -1296,7 +1315,7 @@ namespace HySlam.Core.Slam
             Mat frame,
             double laneWidthMeters = 3.5,
             double nearMeters = 2.0,
-            double farMeters = 30.0)
+            double farMeters = 25.0)
         {
             if (frame.Empty() || frame.Channels() < 3)
                 return;
