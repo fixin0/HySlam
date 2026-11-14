@@ -93,6 +93,7 @@ HySlam/
 │   │   ├── LocalBundleAdjuster.cs  // Sliding-window pose and point refinement
 │   │   ├── LoopClosureDetector.cs  // ORB descriptor place recognition
 │   │   ├── SemanticClassifier.cs   // Rule-based point labels (ground/building/...)
+│   │   ├── LaneTracker.cs          // End-to-end lane detection and smoothing
 │   │   ├── CameraCalibration.cs    // Intrinsics/distortion loading and scaling
 │   │   ├── CameraPose.cs           // Camera rotation + translation
 │   │   └── KeyframeManager.cs      // Bounded keyframe history
@@ -114,7 +115,8 @@ HySlam/
 │       └── Shaders.glsl            // Vertex + fragment shader (#vertex / #fragment)
 │
 └── UI/
-    └── CameraFeedWindow.cs         // VideoCapture wrapper (no OpenCV preview window)
+    ├── CameraFeedWindow.cs         // VideoCapture wrapper
+    └── ViewerControls.cs           // OpenCV trackbar panel for live viewer options
 ```
 
 ## Requirements
@@ -819,10 +821,12 @@ pacing is disabled in this mode; one source frame is read per update.
 
 The interactive viewer is a single full-window free camera. There is no separate
 top-down view. A second window shows the source video with the active lane drawn
-as a green corridor (two boundaries, a centre line and a translucent fill); use
-`--no-video` to hide it. The lane is projected from the current metric pose onto
-the ground plane, so it also works on roads without painted markings. The
-`--load` viewer uses the same controls and frames the complete map when it opens.
+from the bottom of the frame to the road horizon as a green corridor (two
+boundaries, a centre line and a translucent fill); use `--no-video` to hide it.
+`LaneTracker` detects painted markings with Canny edges and Hough lines and fits
+a smoothed quadratic curve to each side; when markings are missing it falls back
+to the pose-projected corridor. The `--load` viewer uses the same controls and
+frames the complete map when it opens.
 
 A **HySlam Controls** panel provides live trackbars for theme (dark / light),
 visibility (all / roads only / objects only / buildings only), colour mode,

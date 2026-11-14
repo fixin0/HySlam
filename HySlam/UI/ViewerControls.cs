@@ -28,6 +28,7 @@ namespace HySlam.UI
         public ViewerControls(RenderOptions options)
         {
             Cv2.NamedWindow(WindowName, WindowFlags.AutoSize);
+            Cv2.MoveWindow(WindowName, 860, 40);
 
             Log.Information(
                 "Viewer controls: theme {Theme}, colour {Color}, grid {Grid}, point size {Size}.",

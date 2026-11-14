@@ -39,7 +39,7 @@ namespace HySlam.Core
         private int updateFrames;
         private int renderFrames;
 
-        // === Quality and Visualization Settings ===
+        private bool laneWindowPositioned;
         private const int FrameSkip = 3;
 
         private double frameInterval = 1.0 / 30.0;
@@ -280,6 +280,12 @@ namespace HySlam.Core
                 using var annotated = capture.Frame.Clone();
                 slam.DrawLaneOverlay(annotated);
                 Cv2.ImShow("HySlam Lane", annotated);
+                if (!laneWindowPositioned)
+                {
+                    Cv2.MoveWindow("HySlam Lane", 20, 40);
+                    Cv2.SetWindowProperty("HySlam Lane", WindowPropertyFlags.Topmost, 1);
+                    laneWindowPositioned = true;
+                }
                 Cv2.WaitKey(1);
             }
 

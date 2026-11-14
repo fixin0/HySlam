@@ -64,11 +64,11 @@ Highway defaults:
   class colours, or --color-mode:confidence for the confidence palette. The
   ground grid and height axis are hidden by default; add --grid to show them.
 
-  Interactive runs also open a source-video window with the active lane drawn as
-  a green corridor (two boundaries, a centre line and a translucent fill). The
-  lane is projected from the current metric pose onto the ground plane and
-  follows the recent yaw rate, so gentle motorway curves bend the corridor.
-  Use --no-video to hide the window.
+  Interactive runs also open a source-video window with the active lane drawn
+  from the bottom of the frame to the road horizon as a green corridor (two
+  boundaries, a centre line and a translucent fill). Painted markings are fitted
+  with a smoothed curve; when markings are missing the corridor falls back to
+  the pose projection. Use --no-video to hide the window.
 
   The viewer also opens a "HySlam Controls" panel with trackbars for theme,
   visibility (all/roads/objects/buildings), colour mode, grid, lane lines,

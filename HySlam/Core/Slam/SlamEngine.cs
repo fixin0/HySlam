@@ -72,6 +72,7 @@ namespace HySlam.Core.Slam
         private readonly MapData map;
         private readonly KeyframeManager keyframes;
         private readonly MotionPredictor motionPredictor = new();
+        private readonly LaneTracker laneTracker = new();
         private readonly VoxelGrid spatialIndex = new();
         private readonly CameraPose currentPose = new();
         private readonly Mat gray = new();
@@ -304,6 +305,7 @@ namespace HySlam.Core.Slam
             rngState = 0x9E3779B97F4A7C15UL;
 
             motionPredictor.Reset();
+            laneTracker.Reset();
 
             previousGray?.Dispose();
             previousGray = null;
@@ -1304,20 +1306,22 @@ namespace HySlam.Core.Slam
         }
 
         /// <summary>
-        /// Draws the ego lane corridor on a BGR frame. The lane is projected from
-        /// the current metric pose onto the ground plane, so it shows the lane the
-        /// camera is currently in even when the road has no painted markings.
-        ///
-        /// The corridor is centred on the camera heading: two green boundaries at
-        /// +/- laneWidth/2 and a brighter centre line, plus a translucent fill.
+        /// Draws the active lane corridor on a BGR frame from the bottom of the
+        /// image up to the road horizon. When painted lane markings are visible,
+        /// <see cref="LaneTracker"/> fits and smooths the left/right boundaries
+        /// directly from the image; otherwise the ego lane is projected from the
+        /// current metric pose.
         /// </summary>
         public void DrawLaneOverlay(
             Mat frame,
             double laneWidthMeters = 3.5,
-            double nearMeters = 2.0,
-            double farMeters = 25.0)
+            double nearMeters = 1.2,
+            double farMeters = 90.0)
         {
             if (frame.Empty() || frame.Channels() < 3)
+                return;
+
+            if (laneTracker.TryDraw(frame))
                 return;
 
             double halfWidth = laneWidthMeters * 0.5;
