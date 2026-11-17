@@ -502,12 +502,12 @@ $$
 S = 0.35\,\bar{\rho}_{inlier} + 0.25\,c_{coverage} + 0.20\,d_{density} + 0.20\,s_{smoothness},
 $$
 
-where $\bar{\rho}_{inlier}$ is the average `inliers / matches` over processed
+where is the average `inliers / matches` over processed
 frames, $c_{coverage}$ is the fraction of processed frames with at least 30
 inliers, and
 
 $$
-d_{density} = \min\!\left(1,\frac{\text{confirmed points}}{N\cdot 250}\right)
+d_{density} = \min\left(1,\frac{\text{confirmed points}}{N\cdot 250}\right)
 $$
 
 is confirmed map points per processed frame, saturated at 250. A point is
