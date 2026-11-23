@@ -1,6 +1,6 @@
 # HySlam
 
-A modularized monocular visual SLAM demo built with OpenTK (OpenGL) and OpenCVSharp.
+A modularized monocular visual SLAM demo built with raylib (raylib-cs) and OpenCVSharp.
 It reads frames from a video file, converts them to grayscale for all vision processing,
 tracks near-field road features with pyramidal Lucas-Kanade optical flow, estimates a
 metric 3-DOF camera motion (yaw + translation) on the road plane, triangulates above-road
@@ -25,7 +25,7 @@ the whole clip in several passes and exports the best-scoring result. A read-onl
 | Ground | Locally planar and visible in the lower part of the frame |
 | Scale | Fixed by `--camera-height` and the focal length; a wrong height or focal length scales the whole trajectory |
 | Mapping | Sparse points from recent keyframes (multi-keyframe triangulation); no loop closure, relocalization or bundle adjustment |
-| Modes | Interactive OpenGL viewer, headless multi-pass `--bake`, read-only `--load` viewer, headless `--verify` |
+| Modes | Interactive raylib viewer, headless multi-pass `--bake`, read-only `--load` viewer, headless `--verify` |
 | Output | Approximate trajectory and point cloud for inspection, not metrology or control |
 
 ## Quick start
@@ -75,7 +75,7 @@ HySlam/
 ├── HySlam.csproj
 │
 ├── Core/
-│   ├── WindowManager.cs            // OpenTK lifecycle and interactive loop
+│   ├── WindowManager.cs            // raylib lifecycle and interactive loop
 │   ├── LoadedMapWindow.cs          // Read-only viewer for an exported map
 │   ├── RunOptions.cs               // Parsed command line configuration
 │   │
@@ -110,9 +110,7 @@ HySlam/
 │   │   └── VoxelGrid.cs            // Spatial hash that prevents duplicate points
 │   │
 │   └── Rendering/
-│       ├── MapRenderer.cs          // Free-camera view with semantic filter and frustum culling
-│       ├── Shader.cs               // Shader compilation/linking and uniform handling
-│       └── Shaders.glsl            // Vertex + fragment shader (#vertex / #fragment)
+│       └── MapRenderer.cs          // raylib free camera, point quads, semantic filter, frustum culling
 │
 └── UI/
     ├── CameraFeedWindow.cs         // VideoCapture wrapper
@@ -122,14 +120,14 @@ HySlam/
 ## Requirements
 
 - .NET 10 SDK
-- 64-bit Windows (the native OpenCV runtime ships with the `OpenCvSharp5.runtime.win` package)
-- A GPU/driver with OpenGL 3.3 Core support
+- 64-bit Windows (the native raylib and OpenCV runtimes ship with the NuGet packages)
+- A GPU/driver with OpenGL 3.3 Core support for the raylib viewer
 
 NuGet packages:
 
 | Package | Purpose |
 | --- | --- |
-| `OpenTK` | Window, OpenGL context, input |
+| `Raylib-cs` | Window, input, 3D rendering |
 | `OpenCvSharp5` | Image processing, ORB, optical flow, geometry |
 | `OpenCvSharp5.runtime.win` | Native OpenCV DLLs |
 
@@ -336,7 +334,7 @@ dotnet run --project HySlam\HySlam.csproj -- --source:video --path C:\clips\road
 ```
 
 This reads 120 source frames with deterministic pacing and writes the CSV dump. Use
-it to verify the build, OpenGL context, video decoding and dump path before tuning
+it to verify the build, raylib window, video decoding and dump path before tuning
 anything.
 
 ### 2. Motorway (default)
@@ -668,6 +666,10 @@ of at least $30^\circ$.
 
 ### Rendering options
 
+The window, input and 3D point-cloud view are drawn with **raylib** through the
+`Raylib-cs` binding. Each map point is rendered as a small camera-facing quad so
+the cloud keeps a readable on-screen size at any zoom level.
+
 The viewer defaults to a **LiDAR-style height palette**: a Turbo ramp from blue
 at low points through cyan, green and yellow to red at high points, on a pure
 black background. The ground grid and height axis are hidden by default so the
@@ -880,10 +882,12 @@ $\mathbf{r}=(\cos\psi,0,-\sin\psi)$.
      `0.5-45 m`, parallax `>= 0.3 deg`, reprojection error `<= 2.0 px`, at least `0.4 m`
      above the road and within `30 m` lateral / `80 m` longitudinal of the camera.
    - Both kinds use a `0.3 m` voxel spacing to avoid duplicate clusters.
-6. `MapRenderer` uploads the current map each frame and draws one full-window
-   perspective free camera. It uses a pure black background. Map point colors are
-   sampled from the source video; the view adds a major/minor ground grid, a vertical
-   height axis with 5-unit ticks and a camera frustum.
+6. `MapRenderer` draws the current map each frame with raylib and one full-window
+   perspective free camera. Each point is a small camera-facing quad whose size
+   follows the configured point size, so z-order and depth testing stay correct.
+   It uses a pure black background. Map point colors are sampled from the source
+   video; the view adds a major/minor ground grid, a vertical height axis with
+   5-unit ticks and a camera frustum.
 
 ### Core geometry
 
@@ -955,7 +959,7 @@ explicitly with `git add -f` only after checking its license and privacy.
   frame per update. `Cv2.SetTheRNG(...)` seeds OpenCV's RANSAC at startup, and the
   custom odometry RANSAC uses its own fixed seed, so repeated runs with the same input
   produce byte-identical CSV dumps. `--bake` always enables deterministic mode.
-- **Offline bake:** `--bake` runs the whole clip in 1-10 passes without an OpenGL window,
+- **Offline bake:** `--bake` runs the whole clip in 1-10 passes without opening a graphics window,
   chains the best trajectory into the next pass as a motion prior, raises the structure
   triangulation budget in the completion pass and exports only the best-scoring pass. See
   [Offline bake](#offline-bake).

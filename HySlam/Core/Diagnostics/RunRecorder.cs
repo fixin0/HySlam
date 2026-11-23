@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Text;
 using HySlam.Core.Data;
 using HySlam.Core.Slam;
-using GLVector3 = OpenTK.Mathematics.Vector3;
+using GLVector3 = System.Numerics.Vector3;
 
 namespace HySlam.Core.Diagnostics
 {
@@ -114,10 +114,10 @@ namespace HySlam.Core.Diagnostics
 
                 double path = 0.0;
                 for (int i = 1; i < trajectory.Count; i++)
-                    path += (trajectory[i] - trajectory[i - 1]).Length;
+                    path += (trajectory[i] - trajectory[i - 1]).Length();
 
                 double span = trajectory.Count > 1
-                    ? (trajectory[^1] - trajectory[0]).Length
+                    ? (trajectory[^1] - trajectory[0]).Length()
                     : 0.0;
 
                 double duration = fps > 0 ? framesRead / fps : 0.0;

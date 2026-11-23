@@ -2,7 +2,7 @@ using HySlam.Core.Data;
 using OpenCvSharp;
 using Serilog;
 
-using GLVector3 = OpenTK.Mathematics.Vector3;
+using GLVector3 = System.Numerics.Vector3;
 
 namespace HySlam.Core.Slam
 {
@@ -527,7 +527,7 @@ namespace HySlam.Core.Slam
             TrimMapIfNeeded();
 
             var camPos = currentPose.GetCameraPositionGL();
-            if (map.Trajectory.Count == 0 || (camPos - map.Trajectory[^1]).Length > 0.02f)
+            if (map.Trajectory.Count == 0 || (camPos - map.Trajectory[^1]).Length() > 0.02f)
                 map.Trajectory.Add(camPos);
 
             // Always start the next step from a fresh near-field detection. Reusing only

@@ -58,7 +58,7 @@ namespace HySlam.Core.Slam
 
                 // Skip if the two keyframes are too close in space (not a real loop).
                 var d = current.Pose.GetCameraPositionGL() - past.Pose.GetCameraPositionGL();
-                if (d.Length < MinLoopBaselineMeters)
+                if (d.Length() < MinLoopBaselineMeters)
                     continue;
 
                 // Geometric gate: a loop travels a long path and/or turns around.
@@ -88,14 +88,14 @@ namespace HySlam.Core.Slam
             for (int i = start + 1; i < history.Count; i++)
             {
                 var p = history[i].Pose.GetCameraPositionGL();
-                arc += (p - prev).Length;
+                arc += (p - prev).Length();
                 prev = p;
             }
 
             var currentPos = current.Pose.GetCameraPositionGL();
-            arc += (currentPos - prev).Length;
+            arc += (currentPos - prev).Length();
 
-            double straight = (currentPos - history[start].Pose.GetCameraPositionGL()).Length;
+            double straight = (currentPos - history[start].Pose.GetCameraPositionGL()).Length();
             if (straight < 1e-3)
                 return false;
             if (arc < MinLoopPathMeters)

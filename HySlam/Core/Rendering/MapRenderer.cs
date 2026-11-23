@@ -1,8 +1,8 @@
+using System.Numerics;
 using HySlam.Core.Data;
 using HySlam.Core.Slam;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
-using GLVector3 = OpenTK.Mathematics.Vector3;
+using Raylib_cs;
+using GLVector3 = System.Numerics.Vector3;
 
 namespace HySlam.Core.Rendering
 {
@@ -84,13 +84,20 @@ namespace HySlam.Core.Rendering
         public bool EnableFrustumCulling { get; set; }
     }
 
+    /// <summary>
+    /// Free-camera point-cloud viewer backed by raylib.
+    ///
+    /// raylib's batch renderer has no point primitive, so each map point is drawn
+    /// as a small camera-facing quad. The quad size is derived from the configured
+    /// pixel size, the field of view and the point distance so the cloud keeps the
+    /// same on-screen density regardless of the zoom level.
+    /// </summary>
     internal sealed class MapRenderer : IDisposable
     {
-        private readonly Shader shader;
-        private readonly int vao, vbo;
-
-        // Cached buffer upload: reallocate only when the total float count changes.
-        private int bufferFloats;
+        private const float Deg2Rad = MathF.PI / 180f;
+        private const float CameraFovY = 60f;
+        private const float CameraNear = 0.01f;
+        private const float CameraFar = 1000f;
 
         // Free camera (orbit) variables
         private float freeCamYaw = 45f;
@@ -104,29 +111,6 @@ namespace HySlam.Core.Rendering
 
         // Rendering options.
         private readonly RenderOptions options = new();
-
-        public MapRenderer()
-        {
-            string shaderPath = Path.Combine(AppContext.BaseDirectory, "shaders", "Shaders.glsl");
-            shader = Shader.FromGlslFile(shaderPath);
-
-            vao = GL.GenVertexArray();
-            vbo = GL.GenBuffer();
-
-            GL.BindVertexArray(vao);
-            GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-
-            const int stride = 6 * sizeof(float);
-
-            GL.EnableVertexAttribArray(0);
-            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, IntPtr.Zero);
-
-            GL.EnableVertexAttribArray(1);
-            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, new IntPtr(3 * sizeof(float)));
-
-            GL.BindVertexArray(0);
-            GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-        }
 
         /// <summary>Gets the mutable render options.</summary>
         public RenderOptions Options => options;
@@ -144,17 +128,27 @@ namespace HySlam.Core.Rendering
             freeCamDistance = Math.Clamp(freeCamDistance, 5f, 500f);
         }
 
-        public void Render(Vector2i size, MapData map, CameraPose? pose)
+        public void Render(MapData map, CameraPose? pose)
         {
-            // Single full-window free-camera view.
-            GL.Viewport(0, 0, size.X, size.Y);
-            GL.Scissor(0, 0, size.X, size.Y);
             if (options.Theme == RenderTheme.Light)
-                GL.ClearColor(0.92f, 0.92f, 0.92f, 1f);
+                Raylib.ClearBackground(new Color(235, 235, 235, 255));
             else
-                GL.ClearColor(0.0f, 0.0f, 0.0f, 1f);
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-            RenderScene(size, map, pose);
+                Raylib.ClearBackground(new Color(0, 0, 0, 255));
+
+            GetFreeCamera(map, out var eye, out var target, out var up);
+
+            var camera = new Camera3D
+            {
+                Position = eye,
+                Target = target,
+                Up = up,
+                FovY = CameraFovY,
+                Projection = CameraProjection.Perspective
+            };
+
+            Raylib.BeginMode3D(camera);
+            RenderScene(map, pose, camera);
+            Raylib.EndMode3D();
         }
 
         /// <summary>
@@ -171,27 +165,26 @@ namespace HySlam.Core.Rendering
 
             foreach (var position in map.Trajectory)
             {
-                min = GLVector3.ComponentMin(min, position);
-                max = GLVector3.ComponentMax(max, position);
+                min = GLVector3.Min(min, position);
+                max = GLVector3.Max(max, position);
             }
 
             foreach (var point in map.Points)
             {
-                min = GLVector3.ComponentMin(min, point.Position);
-                max = GLVector3.ComponentMax(max, point.Position);
+                min = GLVector3.Min(min, point.Position);
+                max = GLVector3.Max(max, point.Position);
             }
 
             freeCamTarget = (min + max) * 0.5f;
-            freeCamDistance = Math.Clamp((max - min).Length * 0.8f, 5f, 500f);
+            freeCamDistance = Math.Clamp((max - min).Length() * 0.8f, 5f, 500f);
             freeCamYaw = 45f;
             freeCamPitch = 30f;
             followTrajectory = false;
         }
 
-        private void RenderScene(Vector2i size, MapData map, CameraPose? pose)
+        private void RenderScene(MapData map, CameraPose? pose, Camera3D camera)
         {
             var lines = new List<float>();
-            var points = new List<float>();
 
             // Grid and height axis are optional so the view can match a clean
             // LiDAR-style point cloud.
@@ -206,21 +199,8 @@ namespace HySlam.Core.Rendering
 
             AddTrajectoryLines(lines, map);
 
-            int lineStart = 0;
-            int lineCount = lines.Count / 6;
-
-            // Build frustum planes for culling when a pose is available.
-            Matrix4? frustumMVP = null;
-            if (pose is not null && options.EnableFrustumCulling)
-            {
-                GLVector3 fcEye, fcTarget, fcUp;
-                GetFreeCamera(map, out fcEye, out fcTarget, out fcUp);
-                float fcAspect = (float)size.X / size.Y;
-                var fcProjection = Matrix4.CreatePerspectiveFieldOfView(
-                    MathHelper.DegreesToRadians(60f), fcAspect, 0.1f, 2000f);
-                var fcView = Matrix4.LookAt(fcEye, fcTarget, fcUp);
-                frustumMVP = fcView * fcProjection;
-            }
+            if (lines.Count > 0)
+                DrawLines(lines);
 
             // Height range for the LiDAR-style height palette.
             float minHeight = 0f, maxHeight = 1f;
@@ -238,10 +218,51 @@ namespace HySlam.Core.Rendering
                     maxHeight = minHeight + 1f;
             }
 
-            // Point cloud with optional semantic filtering, confidence threshold
-            // and frustum culling.
-            int pointStart = lineCount;
-            int renderedPoints = 0;
+            // Build frustum planes for culling when a pose is available.
+            Matrix4x4? frustumMVP = null;
+            if (pose is not null && options.EnableFrustumCulling)
+            {
+                float aspect = (float)Math.Max(1, Raylib.GetScreenWidth()) / Math.Max(1, Raylib.GetScreenHeight());
+                var projection = Matrix4x4.CreatePerspectiveFieldOfView(
+                    CameraFovY * Deg2Rad, aspect, CameraNear, CameraFar);
+                var view = Matrix4x4.CreateLookAt(camera.Position, camera.Target, camera.Up);
+                frustumMVP = view * projection;
+            }
+
+            DrawPointCloud(map, camera, minHeight, maxHeight, frustumMVP);
+        }
+
+        private static void DrawLines(List<float> lines)
+        {
+            Rlgl.Begin(DrawMode.Lines);
+            for (int i = 0; i < lines.Count; i += 6)
+            {
+                Rlgl.Color4ub(ToByte(lines[i + 3]), ToByte(lines[i + 4]), ToByte(lines[i + 5]), 255);
+                Rlgl.Vertex3f(lines[i], lines[i + 1], lines[i + 2]);
+            }
+            Rlgl.End();
+        }
+
+        private void DrawPointCloud(
+            MapData map,
+            Camera3D camera,
+            float minHeight,
+            float maxHeight,
+            Matrix4x4? frustumMVP)
+        {
+            if (map.Points.Count == 0)
+                return;
+
+            // Camera-facing basis so every point is a screen-aligned quad.
+            var forward = GLVector3.Normalize(camera.Target - camera.Position);
+            var right = GLVector3.Normalize(GLVector3.Cross(forward, camera.Up));
+            var up = GLVector3.Cross(right, forward);
+
+            float screenHeight = Math.Max(1, Raylib.GetScreenHeight());
+            float tanHalfFov = MathF.Tan(CameraFovY * Deg2Rad * 0.5f);
+            float basePointSize = Math.Max(1f, options.PointSize);
+
+            Rlgl.Begin(DrawMode.Quads);
 
             foreach (var p in map.Points)
             {
@@ -264,95 +285,47 @@ namespace HySlam.Core.Rendering
 
                 var color = ColorForPoint(p, minHeight, maxHeight);
 
-                AddVertex(points, p.Position.X, p.Position.Y, p.Position.Z,
-                    color.X, color.Y, color.Z);
-                renderedPoints++;
+                float distance = GLVector3.Distance(p.Position, camera.Position);
+                float pixelSize = basePointSize * Math.Clamp(15f / (distance + 1f), 0.5f, 2f);
+                float worldPerPixel = 2f * tanHalfFov * Math.Max(distance, 0.01f) / screenHeight;
+                float half = Math.Max(pixelSize * worldPerPixel * 0.5f, 0.001f);
+
+                Rlgl.Color4ub(ToByte(color.X), ToByte(color.Y), ToByte(color.Z), 255);
+
+                var pos = p.Position;
+                Rlgl.Vertex3f(
+                    pos.X - right.X * half - up.X * half,
+                    pos.Y - right.Y * half - up.Y * half,
+                    pos.Z - right.Z * half - up.Z * half);
+                Rlgl.Vertex3f(
+                    pos.X + right.X * half - up.X * half,
+                    pos.Y + right.Y * half - up.Y * half,
+                    pos.Z + right.Z * half - up.Z * half);
+                Rlgl.Vertex3f(
+                    pos.X + right.X * half + up.X * half,
+                    pos.Y + right.Y * half + up.Y * half,
+                    pos.Z + right.Z * half + up.Z * half);
+                Rlgl.Vertex3f(
+                    pos.X - right.X * half + up.X * half,
+                    pos.Y - right.Y * half + up.Y * half,
+                    pos.Z - right.Z * half + up.Z * half);
             }
 
-            int pointCount = renderedPoints;
-
-            // The point cloud is the expensive part of the upload; geometry lines are
-            // small. Reallocate the buffer only when its total size changes, otherwise
-            // update just the line range.
-            int totalFloats = lines.Count + points.Count;
-            if (totalFloats > 0)
-            {
-                GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-
-                if (totalFloats != bufferFloats)
-                {
-                    GL.BufferData(BufferTarget.ArrayBuffer, totalFloats * sizeof(float),
-                        CombineLists(lines, points), BufferUsageHint.DynamicDraw);
-                    bufferFloats = totalFloats;
-                }
-                else if (lines.Count > 0)
-                {
-                    float[] lineData = lines.ToArray();
-                    GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero,
-                        lineData.Length * sizeof(float), lineData);
-                }
-            }
-
-            GLVector3 eye, target, up;
-            Matrix4 projection;
-
-            float aspect = (float)size.X / size.Y;
-
-            GetFreeCamera(map, out eye, out target, out up);
-            projection = Matrix4.CreatePerspectiveFieldOfView(MathHelper.DegreesToRadians(60f), aspect, 0.1f, 2000f);
-
-            Matrix4 view = Matrix4.LookAt(eye, target, up);
-            Matrix4 mvp = view * projection;
-
-            shader.Use();
-            shader.SetMatrix4("uMVP", ref mvp);
-
-            // Distance fading stays disabled so the cloud remains bright when the free
-            // camera is zoomed out.
-            shader.SetVector3("uCameraPos", eye);
-            shader.SetFloat("uNearFade", 0.0f);
-            shader.SetFloat("uFarFade", 0.0f);
-
-            GL.BindVertexArray(vao);
-
-            if (lineCount > 0)
-            {
-                // A Core profile only guarantees a line width of 1.0; asking for more
-                // raises GL_INVALID_VALUE and can upset some drivers.
-                shader.SetInt("uRoundPoints", 0);
-                GL.DrawArrays(PrimitiveType.Lines, lineStart, lineCount);
-            }
-
-            if (pointCount > 0)
-            {
-                shader.SetInt("uRoundPoints", 1);
-                // Point size is controlled from the viewer menu.
-                shader.SetFloat("uPointSize", options.PointSize);
-                GL.DrawArrays(PrimitiveType.Points, pointStart, pointCount);
-            }
-
-            GL.BindVertexArray(0);
-            GL.UseProgram(0);
+            Rlgl.End();
         }
 
-        private static bool IsPointInFrustum(GLVector3 point, Matrix4 mvp)
+        private static bool IsPointInFrustum(GLVector3 point, Matrix4x4 mvp)
         {
-            // Transform point to clip space: v_clip = MVP * v_model (manual mul to avoid
-            // Vector4.Transform overload ambiguity with Quaternion).
-            float x = mvp.Row0.X * point.X + mvp.Row0.Y * point.Y + mvp.Row0.Z * point.Z + mvp.Row0.W;
-            float y = mvp.Row1.X * point.X + mvp.Row1.Y * point.Y + mvp.Row1.Z * point.Z + mvp.Row1.W;
-            float z = mvp.Row2.X * point.X + mvp.Row2.Y * point.Y + mvp.Row2.Z * point.Z + mvp.Row2.W;
-            float w = mvp.Row3.X * point.X + mvp.Row3.Y * point.Y + mvp.Row3.Z * point.Z + mvp.Row3.W;
+            var clip = Vector4.Transform(new Vector4(point, 1f), mvp);
 
             // Perspective divide.
-            if (Math.Abs(w) < 1e-6f)
+            if (MathF.Abs(clip.W) < 1e-6f)
                 return false;
 
-            // Normalised device coordinates are in [-1, 1] for points inside the
-            // frustum (with the OpenGL convention used by OpenTK).
-            return x >= -w && x <= w &&
-                   y >= -w && y <= w &&
-                   z >= -w && z <= w;
+            // Normalised device coordinates are in [-1, 1] for points inside the frustum.
+            return clip.X >= -clip.W && clip.X <= clip.W &&
+                   clip.Y >= -clip.W && clip.Y <= clip.W &&
+                   clip.Z >= -clip.W && clip.Z <= clip.W;
         }
 
         private bool PassesVisibilityFilter(MapPoint point)
@@ -442,8 +415,8 @@ namespace HySlam.Core.Rendering
             if (followTrajectory && map.Trajectory.Count > 0)
                 freeCamTarget = map.Trajectory[^1];
 
-            float yawRad = MathHelper.DegreesToRadians(freeCamYaw);
-            float pitchRad = MathHelper.DegreesToRadians(freeCamPitch);
+            float yawRad = freeCamYaw * Deg2Rad;
+            float pitchRad = freeCamPitch * Deg2Rad;
 
             var offset = new GLVector3(
                 freeCamDistance * (float)Math.Cos(pitchRad) * (float)Math.Cos(yawRad),
@@ -484,12 +457,12 @@ namespace HySlam.Core.Rendering
 
                 var direction = b - a;
                 direction.Y = 0f;
-                if (direction.LengthSquared < 1e-6f)
+                if (direction.LengthSquared() < 1e-6f)
                     continue;
 
                 direction = GLVector3.Normalize(direction);
                 var right = GLVector3.Cross(direction, GLVector3.UnitY);
-                if (right.LengthSquared < 1e-6f)
+                if (right.LengthSquared() < 1e-6f)
                     continue;
 
                 right = GLVector3.Normalize(right);
@@ -577,14 +550,14 @@ namespace HySlam.Core.Rendering
             var fwd = new GLVector3((float)pose.Rotation[0, 2], (float)-pose.Rotation[1, 2], (float)-pose.Rotation[2, 2]);
             var up = new GLVector3((float)-pose.Rotation[0, 1], (float)pose.Rotation[1, 1], (float)pose.Rotation[2, 1]);
 
-            if (fwd.LengthSquared < 1e-6f) return;
+            if (fwd.LengthSquared() < 1e-6f) return;
             fwd = GLVector3.Normalize(fwd);
             up = GLVector3.Normalize(up);
 
             var right = GLVector3.Normalize(GLVector3.Cross(fwd, up));
             up = GLVector3.Normalize(GLVector3.Cross(right, fwd));
 
-            float fovY = MathHelper.DegreesToRadians(70f);
+            float fovY = 70f * Deg2Rad;
             float length = 4.0f;
             float h = (float)Math.Tan(fovY / 2) * length;
             float w = h * 1.5f; // Wide-angle aspect ratio
@@ -607,6 +580,11 @@ namespace HySlam.Core.Rendering
             AddLine(data, p4, p1, c);
         }
 
+        private static byte ToByte(float value)
+        {
+            return (byte)Math.Clamp((int)MathF.Round(value * 255f), 0, 255);
+        }
+
         private static void AddVertex(List<float> data, float x, float y, float z, float r, float g, float b)
         {
             data.Add(x); data.Add(y); data.Add(z);
@@ -619,18 +597,9 @@ namespace HySlam.Core.Rendering
             AddVertex(data, b.X, b.Y, b.Z, color.X, color.Y, color.Z);
         }
 
-        private static float[] CombineLists(List<float> a, List<float> b)
-        {
-            float[] result = new float[a.Count + b.Count];
-            a.CopyTo(result);
-            b.CopyTo(result, a.Count);
-            return result;
-        }
         public void Dispose()
         {
-            GL.DeleteBuffer(vbo);
-            GL.DeleteVertexArray(vao);
-            shader.Dispose();
+            // raylib owns the rendering resources; nothing to release here.
         }
     }
 }

@@ -75,7 +75,7 @@ Highway defaults:
   trajectory and point size. Changes apply immediately.
 
 Bake mode (--bake):
-  Processes the whole video offline without opening the OpenGL window. The
+  Processes the whole video offline without opening a graphics window. The
   default 5-pass plan is: baseline, adaptive tracking, guided by the previous
   trajectory, structure completion, cleanup and final decision. Each pass is
   scored and only the best-scoring pass is exported. The progress bar reports

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using OpenCvSharp;
 using HySlam.Core.Data;
-using GLVector3 = OpenTK.Mathematics.Vector3;
+using GLVector3 = System.Numerics.Vector3;
 
 namespace HySlam.Core.Slam
 {
@@ -90,7 +90,7 @@ namespace HySlam.Core.Slam
             {
                 // Only consider points reasonably close to this keyframe.
                 var d = point.Position - kfCenter;
-                if (d.LengthSquared > MaxPointDepth * MaxPointDepth)
+                if (d.LengthSquared() > MaxPointDepth * MaxPointDepth)
                     continue;
 
                 // Project the 3D point into the keyframe image.
@@ -252,7 +252,7 @@ namespace HySlam.Core.Slam
                     var c1 = observers[i].kf.Pose.GetCameraPositionGL();
                     var c2 = observers[j].kf.Pose.GetCameraPositionGL();
                     var d = c2 - c1;
-                    double baseline = d.LengthSquared;
+                    double baseline = d.LengthSquared();
                     if (baseline > bestBaseline)
                     {
                         bestBaseline = baseline;

@@ -1,4 +1,4 @@
-using GLVector3 = OpenTK.Mathematics.Vector3;
+using GLVector3 = System.Numerics.Vector3;
 
 namespace HySlam.Core.Slam
 {
@@ -81,7 +81,7 @@ namespace HySlam.Core.Slam
             var up = new GLVector3((float)-Rotation[0, 1], (float)Rotation[1, 1], (float)-Rotation[2, 1]);
             var fwd = new GLVector3((float)Rotation[0, 2], (float)Rotation[1, 2], (float)Rotation[2, 2]);
             var right = GLVector3.Cross(fwd, up);
-            if (right.LengthSquared < 1e-6) return 0.0;
+            if (right.LengthSquared() < 1e-6) return 0.0;
             right = GLVector3.Normalize(right);
             var worldUp = GLVector3.UnitY;
             double dot = Math.Clamp(GLVector3.Dot(right, worldUp), -1.0, 1.0);

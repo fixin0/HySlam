@@ -571,7 +571,7 @@ namespace HySlam.Core.Bake
 
             double duration = selected.Fps > 0.0 ? selected.FramesRead / selected.Fps : 0.0;
             double span = selected.Map.Trajectory.Count > 1
-                ? (selected.Map.Trajectory[^1] - selected.Map.Trajectory[0]).Length
+                ? (selected.Map.Trajectory[^1] - selected.Map.Trajectory[0]).Length()
                 : 0.0;
 
             writer.WriteLine($"path_meters={F(selected.PathMeters)}");

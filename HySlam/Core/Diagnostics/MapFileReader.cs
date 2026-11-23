@@ -1,6 +1,6 @@
 using System.Globalization;
 using HySlam.Core.Data;
-using GLVector3 = OpenTK.Mathematics.Vector3;
+using GLVector3 = System.Numerics.Vector3;
 
 namespace HySlam.Core.Diagnostics
 {
@@ -57,10 +57,10 @@ namespace HySlam.Core.Diagnostics
 
             double pathMeters = 0.0;
             for (int i = 1; i < map.Trajectory.Count; i++)
-                pathMeters += (map.Trajectory[i] - map.Trajectory[i - 1]).Length;
+                pathMeters += (map.Trajectory[i] - map.Trajectory[i - 1]).Length();
 
             double spanMeters = map.Trajectory.Count > 1
-                ? (map.Trajectory[^1] - map.Trajectory[0]).Length
+                ? (map.Trajectory[^1] - map.Trajectory[0]).Length()
                 : 0.0;
 
             info = new MapFileInfo

@@ -3,19 +3,23 @@ using HySlam.Core.Diagnostics;
 using HySlam.Core.Rendering;
 using HySlam.Core.Slam;
 using HySlam.UI;
-using System.ComponentModel;
 using OpenCvSharp;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using Raylib_cs;
 using Serilog;
 
 namespace HySlam.Core
 {
-    internal sealed class WindowManager : GameWindow
+    /// <summary>
+    /// Interactive viewer: reads the video, runs the SLAM pipeline and draws the
+    /// live map with raylib. The class owns a native raylib window, so
+    /// <see cref="Run"/> must be called from the main thread.
+    /// </summary>
+    internal sealed class WindowManager : IDisposable
     {
+        private const int WindowWidth = 1280;
+        private const int WindowHeight = 720;
+        private const int TargetFps = 60;
+
         private readonly RunOptions options;
         private readonly string videoPath;
 
@@ -32,6 +36,8 @@ namespace HySlam.Core
         private int framesRead;
         private int framesProcessed;
         private bool videoEnded, recordingFinished;
+        private bool closeRequested;
+        private bool disposed;
 
         // Diagnostics: log every step of the first few frames so a native crash can
         // be located from the last line that reached the log sink.
@@ -46,48 +52,71 @@ namespace HySlam.Core
         private double frameRate = 30.0;
         private double accumulatedTime;
 
+        private int lastWindowWidth;
+        private int lastWindowHeight;
+
         public WindowManager(RunOptions options)
-            : base(
-                CreateGameWindowSettings(),
-                new NativeWindowSettings
-                {
-                    ClientSize = new Vector2i(1280, 720),
-                    Title = "HySlam Window + " + options.VideoPath,
-                    APIVersion = new Version(3, 3),
-                    Profile = ContextProfile.Core,
-                    NumberOfSamples = 4
-                })
         {
             this.options = options;
             videoPath = options.VideoPath
                 ?? throw new InvalidOperationException("The interactive viewer requires a video path.");
         }
 
-        private static GameWindowSettings CreateGameWindowSettings()
+        /// <summary>
+        /// Creates the raylib window, runs the render loop until the user closes it
+        /// and releases every resource on the way out.
+        /// </summary>
+        public void Run()
         {
-            var s = GameWindowSettings.Default;
-            s.UpdateFrequency = 60;
-            return s;
+            Raylib.SetConfigFlags(ConfigFlags.Msaa4xHint | ConfigFlags.ResizableWindow);
+            Raylib.SetTraceLogLevel(TraceLogLevel.Warning);
+            Raylib.InitWindow(WindowWidth, WindowHeight, "HySlam Window + " + videoPath);
+            Raylib.SetTargetFPS(TargetFps);
+
+            lastWindowWidth = Raylib.GetScreenWidth();
+            lastWindowHeight = Raylib.GetScreenHeight();
+
+            try
+            {
+                OnLoad();
+
+                while (!closeRequested && !Raylib.WindowShouldClose())
+                {
+                    if (Raylib.IsKeyDown(KeyboardKey.Escape))
+                    {
+                        closeRequested = true;
+                        break;
+                    }
+
+                    OnUpdateFrame(Raylib.GetFrameTime());
+
+                    if (closeRequested)
+                        break;
+
+                    OnRenderFrame();
+                }
+
+                OnClosing();
+            }
+            finally
+            {
+                OnUnload();
+
+                if (Raylib.IsWindowReady())
+                    Raylib.CloseWindow();
+            }
         }
 
-        protected override void OnLoad()
+        private void OnLoad()
         {
             try
             {
                 Log.Information("OnLoad: begin.");
 
-                base.OnLoad();
-                Log.Information("OnLoad: base.OnLoad completed.");
-
-                GL.Enable(EnableCap.DepthTest);
-                GL.Enable(EnableCap.ProgramPointSize);
-                GL.Enable(EnableCap.ScissorTest);
-
                 Log.Information(
-                    "OpenGL {Version} on {Renderer} ({Vendor}).",
-                    GL.GetString(StringName.Version) ?? "unknown",
-                    GL.GetString(StringName.Renderer) ?? "unknown",
-                    GL.GetString(StringName.Vendor) ?? "unknown");
+                    "raylib {RaylibVersion} on OpenGL profile {GlVersion}.",
+                    Raylib.RAYLIB_VERSION,
+                    Rlgl.GetVersion());
 
                 InitializeRenderer();
                 InitializeSLAM();
@@ -99,7 +128,7 @@ namespace HySlam.Core
             catch (Exception ex)
             {
                 Log.Fatal(ex, "HySlam failed to initialize.");
-                Close();
+                closeRequested = true;
             }
         }
 
@@ -110,12 +139,6 @@ namespace HySlam.Core
             renderer.Options.Theme = options.Theme;
             renderer.Options.ShowGrid = options.ShowGrid;
             Log.Information("Map Renderer initialized.");
-            if(renderer == null)
-            {
-                Log.Error("Failed to initialize Map Renderer.");
-                throw new Exception("Failed to initialize Map Renderer.");
-            }
-
         }
 
         private void InitializeSLAM()
@@ -177,19 +200,12 @@ namespace HySlam.Core
                 options.MaxTranslationStep,
                 options.LkWindowSize,
                 options.LkLevels);
-            if(slam == null)
-            {
-                Log.Error("Failed to initialize SLAM Engine.");
-                throw new Exception("Failed to initialize SLAM Engine.");
-            }
         }
 
-        protected override void OnUpdateFrame(FrameEventArgs e)
+        private void OnUpdateFrame(float deltaTime)
         {
             try
             {
-                base.OnUpdateFrame(e);
-
                 updateFrames++;
                 if (updateFrames <= TraceFrames || updateFrames % 120 == 0)
                 {
@@ -200,25 +216,18 @@ namespace HySlam.Core
                         framesProcessed);
                 }
 
-                if (KeyboardState.IsKeyDown(Keys.Escape))
-                {
-                    Close();
-                    return;
-                }
+                LogWindowSizeChanges();
 
                 // --- FREE VIEW MOUSE CONTROL (whole window) ---
-                var mouse = MouseState;
-
-                if (mouse.IsButtonDown(MouseButton.Left))
+                if (Raylib.IsMouseButtonDown(MouseButton.Left))
                 {
-                    renderer.Orbit(mouse.Delta.X, mouse.Delta.Y);
+                    var delta = Raylib.GetMouseDelta();
+                    renderer.Orbit(delta.X, delta.Y);
                 }
 
-                float scroll = mouse.ScrollDelta.Y;
-                if (scroll != 0)
-                {
+                float scroll = Raylib.GetMouseWheelMove();
+                if (scroll != 0f)
                     renderer.Zoom(scroll);
-                }
 
                 controls.Update(renderer.Options);
 
@@ -232,7 +241,7 @@ namespace HySlam.Core
                     }
                     else
                     {
-                        accumulatedTime += e.Time;
+                        accumulatedTime += deltaTime;
                         const double maxAccum = 0.5;
                         if (accumulatedTime > maxAccum) accumulatedTime = maxAccum;
 
@@ -244,7 +253,8 @@ namespace HySlam.Core
                     }
                 }
 
-                Title = $"HySlam | Inliers: {slam.InlierCount} | +3D: {slam.TriangulatedCount} | Total: {map.Points.Count}";
+                Raylib.SetWindowTitle(
+                    $"HySlam | Inliers: {slam.InlierCount} | +3D: {slam.TriangulatedCount} | Total: {map.Points.Count}");
 
                 if (updateFrames <= TraceFrames)
                     Log.Information("OnUpdateFrame #{UpdateFrame}: end.", updateFrames);
@@ -252,8 +262,20 @@ namespace HySlam.Core
             catch (Exception ex)
             {
                 Log.Fatal(ex, "HySlam update failed.");
-                Close();
+                closeRequested = true;
             }
+        }
+
+        private void LogWindowSizeChanges()
+        {
+            int width = Raylib.GetScreenWidth();
+            int height = Raylib.GetScreenHeight();
+            if (width == lastWindowWidth && height == lastWindowHeight)
+                return;
+
+            lastWindowWidth = width;
+            lastWindowHeight = height;
+            Log.Information("OnResize: {Width}x{Height}.", width, height);
         }
 
         private void ProcessVideoFrame()
@@ -350,12 +372,10 @@ namespace HySlam.Core
                 frameRate);
         }
 
-        protected override void OnRenderFrame(FrameEventArgs e)
+        private void OnRenderFrame()
         {
             try
             {
-                base.OnRenderFrame(e);
-
                 renderFrames++;
                 if (renderFrames <= TraceFrames || renderFrames % 120 == 0)
                 {
@@ -366,60 +386,62 @@ namespace HySlam.Core
                         map.Trajectory.Count);
                 }
 
-                renderer.Render(Size, map, slam.Pose);
+                Raylib.BeginDrawing();
+                renderer.Render(map, slam.Pose);
+                Raylib.EndDrawing();
 
                 if (renderFrames <= TraceFrames)
                     Log.Information("OnRenderFrame #{RenderFrame}: scene drawn.", renderFrames);
-
-                SwapBuffers();
-
-                if (renderFrames <= TraceFrames)
-                    Log.Information("OnRenderFrame #{RenderFrame}: buffers swapped.", renderFrames);
             }
             catch (Exception ex)
             {
                 Log.Fatal(ex, "HySlam render failed.");
-                Close();
+                closeRequested = true;
             }
         }
 
-
-        protected override void OnResize(ResizeEventArgs e)
-        {
-            Log.Information("OnResize: {Width}x{Height}.", e.Width, e.Height);
-            base.OnResize(e);
-        }
-
-        protected override void OnClosing(CancelEventArgs e)
+        private void OnClosing()
         {
             Log.Information(
                 "OnClosing: videoEnded={VideoEnded}, frames read={FramesRead}, processed={FramesProcessed}.",
                 videoEnded,
                 framesRead,
                 framesProcessed);
-
-            base.OnClosing(e);
         }
 
-        protected override void OnUnload()
+        private void OnUnload()
         {
             Log.Information("OnUnload: begin.");
-            base.OnUnload();
 
             FinishRecording();
             Log.Information("OnUnload: recording finished.");
 
+            DisposeResources();
+            Log.Information("OnUnload: resources disposed.");
+            Log.Information("OnUnload: end.");
+        }
+
+        private void DisposeResources()
+        {
             controls?.Dispose();
             capture?.Dispose();
             keyframes?.Dispose();
             slam?.Dispose();
             recorder?.Dispose();
-            Log.Information("OnUnload: resources disposed.");
 
             try { Cv2.DestroyAllWindows(); } catch { }
 
             renderer?.Dispose();
-            Log.Information("OnUnload: end.");
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+
+            disposed = true;
+            if (Raylib.IsWindowReady())
+                Raylib.CloseWindow();
         }
     }
 }

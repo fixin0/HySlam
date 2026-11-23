@@ -90,7 +90,7 @@ namespace HySlam.Core.Bake
                 double path = 0.0;
                 var trajectory = Map.Trajectory;
                 for (int i = 1; i < trajectory.Count; i++)
-                    path += (trajectory[i] - trajectory[i - 1]).Length;
+                    path += (trajectory[i] - trajectory[i - 1]).Length();
 
                 return path;
             }
